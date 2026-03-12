@@ -1,0 +1,27 @@
+## Interface: 120001
+## Title: Pirates Plunder
+## Author: Lucidify
+## Version: 0.1.0
+## Category-enUS: Loot
+## Category-deDE: Beute
+## Category-esES: Botín
+## Category-esMX: Botín
+## Category-frFR: Butin
+## Category-itIT: Bottino
+## Category-koKR: 전리품
+## Category-ptBR: Saque
+## Category-ruRU: Добыча
+## Category-zhCN: 战利品
+## Category-zhTW: 戰利品
+## SavedVariables: PiratesPlunderDB
+
+embeds.xml
+
+main.lua
+Modules\Roster.lua
+Modules\Raid.lua
+Modules\Loot.lua
+Modules\Sync.lua
+Modules\Trade.lua
+UI\MainWindow.lua
+UI\LootWindow.lua

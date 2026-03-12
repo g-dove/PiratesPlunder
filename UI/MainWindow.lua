@@ -1,0 +1,781 @@
+---------------------------------------------------------------------------
+-- Pirates Plunder – Main Window UI (Roster + Raids tabs)
+---------------------------------------------------------------------------
+local PP  = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
+local AceGUI = PP.AceGUI
+
+---------------------------------------------------------------------------
+-- Toggle
+---------------------------------------------------------------------------
+function PP:ToggleMainWindow()
+    if self.mainWindow then
+        self.mainWindow:Release()
+        self.mainWindow = nil
+        return
+    end
+    self:CreateMainWindow()
+end
+
+function PP:RefreshMainWindow()
+    if not self.mainWindow then return end
+    if self._currentTab == "roster" then
+        self:DrawRosterTab(self._tabContainer)
+    elseif self._currentTab == "raids" then
+        self:DrawRaidsTab(self._tabContainer)
+    elseif self._currentTab == "settings" then
+        self:DrawSettingsTab(self._tabContainer)
+    end
+end
+
+---------------------------------------------------------------------------
+-- Main window
+---------------------------------------------------------------------------
+function PP:CreateMainWindow()
+    local f = AceGUI:Create("Frame")
+    f:SetTitle("Pirates Plunder")
+    f:SetLayout("Fill")
+    f:SetWidth(740)
+    f:SetHeight(580)
+    f:SetCallback("OnClose", function(widget)
+        AceGUI:Release(widget)
+        PP.mainWindow = nil
+    end)
+    self.mainWindow = f
+
+    -- Make ESC close this window
+    local frameName = "PPMainWindowFrame"
+    _G[frameName] = f.frame
+    tinsert(UISpecialFrames, frameName)
+
+    local tabGroup = AceGUI:Create("TabGroup")
+    tabGroup:SetLayout("Fill")
+    tabGroup:SetTabs({
+        { value = "roster",   text = "Roster" },
+        { value = "raids",    text = "Raids" },
+        { value = "settings", text = "Settings" },
+    })
+    tabGroup:SetCallback("OnGroupSelected", function(container, _, group)
+        container:ReleaseChildren()
+        self._currentTab   = group
+        self._tabContainer = container
+        if group == "roster" then
+            self:DrawRosterTab(container)
+        elseif group == "raids" then
+            self:DrawRaidsTab(container)
+        elseif group == "settings" then
+            self:DrawSettingsTab(container)
+        end
+    end)
+    f:AddChild(tabGroup)
+    tabGroup:SelectTab("roster")
+end
+
+---------------------------------------------------------------------------
+-- Roster tab
+---------------------------------------------------------------------------
+function PP:DrawRosterTab(container)
+    container:ReleaseChildren()
+    -- Always re-check officer status in case guild roster was not ready earlier
+    PP:RefreshOfficerStatus()
+    local canModify = self:CanModify()
+
+    -- Single ScrollFrame as the sole Fill child of the tab container
+    local scroll = AceGUI:Create("ScrollFrame")
+    scroll:SetFullWidth(true)
+    scroll:SetFullHeight(true)
+    scroll:SetLayout("List")
+    container:AddChild(scroll)
+
+    -- Guild selector dropdown (shown when multiple guild rosters are saved)
+    local guildKeys = {}
+    for gk in pairs(self.db.global.guilds) do
+        guildKeys[#guildKeys + 1] = gk
+    end
+    if #guildKeys > 1 then
+        local ddGroup = AceGUI:Create("SimpleGroup")
+        ddGroup:SetFullWidth(true)
+        ddGroup:SetLayout("Flow")
+        scroll:AddChild(ddGroup)
+        local dd = AceGUI:Create("Dropdown")
+        dd:SetLabel("Guild Roster")
+        dd:SetWidth(240)
+        local items = {}
+        for _, gk in ipairs(guildKeys) do items[gk] = gk end
+        dd:SetList(items)
+        dd:SetValue(PP:GetActiveGuildKey())
+        dd:SetCallback("OnValueChanged", function(_, _, val)
+            PP._activeGuildKey = val
+            PP:DrawRosterTab(container)
+        end)
+        ddGroup:AddChild(dd)
+    end
+
+    -- Top bar: add player + actions
+    local topGroup = AceGUI:Create("SimpleGroup")
+    topGroup:SetFullWidth(true)
+    topGroup:SetLayout("Flow")
+    scroll:AddChild(topGroup)
+
+    if canModify then
+        local addBox = AceGUI:Create("EditBox")
+        addBox:SetLabel("Add Player")
+        addBox:SetWidth(200)
+        addBox:SetCallback("OnEnterPressed", function(widget, _, text)
+            if text and text:trim() ~= "" then
+                PP:AddToRoster(text:trim())
+                widget:SetText("")
+            end
+        end)
+        topGroup:AddChild(addBox)
+
+        local randBtn = AceGUI:Create("Button")
+        randBtn:SetText("Randomize Order")
+        randBtn:SetWidth(140)
+        randBtn:SetCallback("OnClick", function()
+            StaticPopup_Show("PP_CONFIRM_RANDOMIZE")
+        end)
+        topGroup:AddChild(randBtn)
+
+        local clearBtn = AceGUI:Create("Button")
+        clearBtn:SetText("Clear Roster")
+        clearBtn:SetWidth(120)
+        clearBtn:SetCallback("OnClick", function()
+            StaticPopup_Show("PP_CONFIRM_CLEAR_ROSTER")
+        end)
+        topGroup:AddChild(clearBtn)
+    end
+
+    -- ── Bulk group-score section ───────────────────────────────────────────
+    if canModify then
+        local bulkHead = AceGUI:Create("Heading")
+        bulkHead:SetFullWidth(true)
+        bulkHead:SetText("Award Group Points")
+        scroll:AddChild(bulkHead)
+
+        local bulkRow = AceGUI:Create("SimpleGroup")
+        bulkRow:SetFullWidth(true)
+        bulkRow:SetLayout("Flow")
+        scroll:AddChild(bulkRow)
+
+        local plusOneBtn = AceGUI:Create("Button")
+        plusOneBtn:SetText("+1 to Group")
+        plusOneBtn:SetWidth(120)
+        plusOneBtn:SetCallback("OnClick", function()
+            if not IsInGroup() then
+                PP:Print("You must be in a group.")
+                return
+            end
+            PP:AddScoreToRaidMembers(1)
+        end)
+        bulkRow:AddChild(plusOneBtn)
+
+        local bulkAmountBox = AceGUI:Create("EditBox")
+        bulkAmountBox:SetLabel("Custom Amount")
+        bulkAmountBox:SetWidth(120)
+        bulkAmountBox:SetText("1")
+        bulkRow:AddChild(bulkAmountBox)
+
+        local applyBtn = AceGUI:Create("Button")
+        applyBtn:SetText("Apply to Group")
+        applyBtn:SetWidth(130)
+        applyBtn:SetCallback("OnClick", function()
+            if not IsInGroup() then
+                PP:Print("You must be in a group.")
+                return
+            end
+            local amt = tonumber(bulkAmountBox:GetText())
+            if not amt then
+                PP:Print("Enter a valid number.")
+                return
+            end
+            PP:AddScoreToRaidMembers(amt)
+        end)
+        bulkRow:AddChild(applyBtn)
+
+        local bulkDesc = AceGUI:Create("Label")
+        bulkDesc:SetFullWidth(true)
+        bulkDesc:SetText("|cFFAAAAAA  Adjusts score for all roster members who are currently in your group.\n  Negative values reduce scores (floor 0 not enforced for custom amounts).\n|r")
+        scroll:AddChild(bulkDesc)
+    end
+
+    -- Heading
+    local heading = AceGUI:Create("Heading")
+    heading:SetFullWidth(true)
+    heading:SetText("Player Roster  (sorted by score)")
+    scroll:AddChild(heading)
+
+    -- Column headers
+    local headerRow = AceGUI:Create("SimpleGroup")
+    headerRow:SetFullWidth(true)
+    headerRow:SetLayout("Flow")
+    scroll:AddChild(headerRow)
+
+    local h1 = AceGUI:Create("Label")
+    h1:SetText("|cFFFFD100#|r")
+    h1:SetWidth(30)
+    headerRow:AddChild(h1)
+
+    local h2 = AceGUI:Create("Label")
+    h2:SetText("|cFFFFD100Name|r")
+    h2:SetWidth(200)
+    headerRow:AddChild(h2)
+
+    local h3 = AceGUI:Create("Label")
+    h3:SetText("|cFFFFD100Realm|r")
+    h3:SetWidth(150)
+    headerRow:AddChild(h3)
+
+    local h4 = AceGUI:Create("Label")
+    h4:SetText("|cFFFFD100Score|r")
+    h4:SetWidth(60)
+    headerRow:AddChild(h4)
+
+    if canModify then
+        local h5 = AceGUI:Create("Label")
+        h5:SetText("|cFFFFD100Actions|r")
+        h5:SetWidth(210)
+        headerRow:AddChild(h5)
+    end
+
+    -- Player rows
+    local sorted  = self:GetSortedRoster()
+    local raidSet = self:GetRaidMemberSet()
+
+    for idx, entry in ipairs(sorted) do
+        local row = AceGUI:Create("SimpleGroup")
+        row:SetFullWidth(true)
+        row:SetLayout("Flow")
+
+        local nameColor = raidSet[entry.fullName] and "|cFF00FF00" or "|cFFAAAAAA"
+
+        local numLabel = AceGUI:Create("Label")
+        numLabel:SetText(tostring(idx))
+        numLabel:SetWidth(30)
+        row:AddChild(numLabel)
+
+        local nameLabel = AceGUI:Create("Label")
+        nameLabel:SetText(nameColor .. entry.name .. "|r")
+        nameLabel:SetWidth(200)
+        row:AddChild(nameLabel)
+
+        local realmLabel = AceGUI:Create("Label")
+        realmLabel:SetText(entry.realm)
+        realmLabel:SetWidth(150)
+        row:AddChild(realmLabel)
+
+        local scoreLabel = AceGUI:Create("Label")
+        scoreLabel:SetText("|cFFFFFF00" .. tostring(entry.score) .. "|r")
+        scoreLabel:SetWidth(60)
+        row:AddChild(scoreLabel)
+
+        if canModify then
+            local scoreBox = AceGUI:Create("EditBox")
+            scoreBox:SetLabel("")
+            scoreBox:SetWidth(50)
+            scoreBox:SetText(tostring(entry.score))
+            local capturedFullName = entry.fullName
+            scoreBox:SetCallback("OnEnterPressed", function(widget, _, text)
+                local val = tonumber(text)
+                if val then
+                    PP:SetPlayerScore(capturedFullName, val)
+                else
+                    widget:SetText(tostring(entry.score))
+                end
+            end)
+            row:AddChild(scoreBox)
+
+            local plusBtn = AceGUI:Create("Button")
+            plusBtn:SetText("+1")
+            plusBtn:SetWidth(50)
+            local capturedScore = entry.score
+            plusBtn:SetCallback("OnClick", function()
+                PP:SetPlayerScore(capturedFullName, capturedScore + 1)
+            end)
+            row:AddChild(plusBtn)
+
+            local minusBtn = AceGUI:Create("Button")
+            minusBtn:SetText("-1")
+            minusBtn:SetWidth(50)
+            minusBtn:SetCallback("OnClick", function()
+                PP:SetPlayerScore(capturedFullName, math.max(0, capturedScore - 1))
+            end)
+            row:AddChild(minusBtn)
+
+            local removeBtn = AceGUI:Create("Button")
+            removeBtn:SetText("Remove")
+            removeBtn:SetWidth(80)
+            removeBtn:SetCallback("OnClick", function()
+                PP._pendingRemovePlayer = entry.fullName
+                StaticPopup_Show("PP_CONFIRM_REMOVE_PLAYER")
+            end)
+            row:AddChild(removeBtn)
+        end
+
+        scroll:AddChild(row)
+    end
+
+    if #sorted == 0 then
+        local empty = AceGUI:Create("Label")
+        empty:SetFullWidth(true)
+        empty:SetText("\n  No players in roster. Join a raid or add players manually.")
+        scroll:AddChild(empty)
+    end
+end
+
+---------------------------------------------------------------------------
+-- Raids tab
+---------------------------------------------------------------------------
+function PP:DrawRaidsTab(container)
+    container:ReleaseChildren()
+    local canModify = self:CanModify()
+
+    -- Single ScrollFrame as the sole Fill child of the tab container
+    local scroll = AceGUI:Create("ScrollFrame")
+    scroll:SetFullWidth(true)
+    scroll:SetFullHeight(true)
+    scroll:SetLayout("List")
+    container:AddChild(scroll)
+
+    -- Guild selector dropdown (shown when multiple guild rosters are saved)
+    local guildKeys = {}
+    for gk in pairs(self.db.global.guilds) do
+        guildKeys[#guildKeys + 1] = gk
+    end
+    if #guildKeys > 1 then
+        local ddGroup = AceGUI:Create("SimpleGroup")
+        ddGroup:SetFullWidth(true)
+        ddGroup:SetLayout("Flow")
+        scroll:AddChild(ddGroup)
+        local dd = AceGUI:Create("Dropdown")
+        dd:SetLabel("Guild Roster")
+        dd:SetWidth(240)
+        local items = {}
+        for _, gk in ipairs(guildKeys) do items[gk] = gk end
+        dd:SetList(items)
+        dd:SetValue(PP:GetActiveGuildKey())
+        dd:SetCallback("OnValueChanged", function(_, _, val)
+            PP._activeGuildKey = val
+            PP:DrawRaidsTab(container)
+        end)
+        ddGroup:AddChild(dd)
+    end
+
+    -- Top bar
+    local topGroup = AceGUI:Create("SimpleGroup")
+    topGroup:SetFullWidth(true)
+    topGroup:SetLayout("Flow")
+    scroll:AddChild(topGroup)
+
+    if canModify then
+        local nameBox = AceGUI:Create("EditBox")
+        nameBox:SetLabel("Raid Name")
+        nameBox:SetWidth(200)
+        nameBox:SetText(date("%Y-%m-%d") .. " Raid")
+        topGroup:AddChild(nameBox)
+        self._raidNameBox = nameBox
+
+        if self:HasActiveRaid() then
+            local closeBtn = AceGUI:Create("Button")
+            closeBtn:SetText("Close Raid")
+            closeBtn:SetWidth(120)
+            closeBtn:SetCallback("OnClick", function()
+                PP:EndRaid()
+            end)
+            topGroup:AddChild(closeBtn)
+        else
+            local createBtn = AceGUI:Create("Button")
+            createBtn:SetText("Create Raid")
+            createBtn:SetWidth(120)
+            createBtn:SetCallback("OnClick", function()
+                local raidName = nameBox:GetText()
+                PP:CreateRaid(raidName)
+            end)
+            topGroup:AddChild(createBtn)
+        end
+    end
+
+    -- Active raid indicator
+    if self:HasActiveRaid() then
+        local raid = self:GetActiveRaid()
+        local activeLabel = AceGUI:Create("Label")
+        activeLabel:SetFullWidth(true)
+        activeLabel:SetText("|cFF00FF00Active Raid:|r " .. (raid and raid.name or "Unknown"))
+        scroll:AddChild(activeLabel)
+    end
+
+    -- Raid history heading
+    local heading = AceGUI:Create("Heading")
+    heading:SetFullWidth(true)
+    heading:SetText("Raid History")
+    scroll:AddChild(heading)
+
+    -- Raid rows
+    local history = self:GetRaidHistory()
+
+    for _, raid in ipairs(history) do
+        local row = AceGUI:Create("InteractiveLabel")
+        row:SetFullWidth(true)
+
+        local status = raid.active and "|cFF00FF00[ACTIVE]|r " or "|cFF888888[ENDED]|r "
+        local dateStr = date("%Y-%m-%d %H:%M", raid.startTime)
+        local text = status .. raid.name .. "  |cFF888888(" .. dateStr .. ")|r"
+            .. "  Bosses: " .. raid.bossCount .. "  Items: " .. raid.itemCount
+
+        row:SetText(text)
+        row:SetHighlight(1, 1, 1, 0.1)
+        row:SetCallback("OnClick", function()
+            PP:ShowRaidDetail(raid.id)
+        end)
+        scroll:AddChild(row)
+    end
+
+    if #history == 0 then
+        local empty = AceGUI:Create("Label")
+        empty:SetFullWidth(true)
+        empty:SetText("\n  No raids recorded yet.")
+        scroll:AddChild(empty)
+    end
+end
+
+---------------------------------------------------------------------------
+-- Raid detail popup (items + bosses)
+---------------------------------------------------------------------------
+function PP:ShowRaidDetail(raidID)
+    -- Search all guild data blocks since the raid may belong to any guild
+    local raid
+    for _, gd in pairs(self.db.global.guilds) do
+        if gd.raids and gd.raids[raidID] then
+            raid = gd.raids[raidID]
+            break
+        end
+    end
+    if not raid then return end
+
+    -- If a detail window is already open, close it
+    if self._raidDetailWindow then
+        self._raidDetailWindow:Release()
+        self._raidDetailWindow = nil
+    end
+
+    local f = AceGUI:Create("Frame")
+    f:SetTitle(raid.name or "Raid Detail")
+    f:SetLayout("Fill")
+    f:SetWidth(550)
+    f:SetHeight(450)
+    f:SetCallback("OnClose", function(widget)
+        AceGUI:Release(widget)
+        PP._raidDetailWindow = nil
+    end)
+    self._raidDetailWindow = f
+
+    -- Make ESC close this window
+    local detailFrameName = "PPRaidDetailFrame"
+    _G[detailFrameName] = f.frame
+    tinsert(UISpecialFrames, detailFrameName)
+
+    local scroll = AceGUI:Create("ScrollFrame")
+    scroll:SetFullWidth(true)
+    scroll:SetFullHeight(true)
+    scroll:SetLayout("List")
+    f:AddChild(scroll)
+
+    -- Info
+    local info = AceGUI:Create("Label")
+    info:SetFullWidth(true)
+    local startStr = date("%Y-%m-%d %H:%M", raid.startTime)
+    local endStr   = raid.endTime and date("%Y-%m-%d %H:%M", raid.endTime) or "In Progress"
+    info:SetText("Leader: " .. self:GetShortName(raid.leader)
+        .. "\nStarted: " .. startStr
+        .. "\nEnded: " .. endStr)
+    scroll:AddChild(info)
+
+    -- Bosses
+    local bossHead = AceGUI:Create("Heading")
+    bossHead:SetFullWidth(true)
+    bossHead:SetText("Boss Kills (" .. #raid.bosses .. ")")
+    scroll:AddChild(bossHead)
+
+    for _, boss in ipairs(raid.bosses) do
+        local bossLabel = AceGUI:Create("Label")
+        bossLabel:SetFullWidth(true)
+        bossLabel:SetText("  " .. boss.encounterName .. "  |cFF888888" .. date("%H:%M", boss.time) .. "|r")
+        scroll:AddChild(bossLabel)
+    end
+    if #raid.bosses == 0 then
+        local nb = AceGUI:Create("Label")
+        nb:SetFullWidth(true)
+        nb:SetText("  No bosses killed.")
+        scroll:AddChild(nb)
+    end
+
+    -- Items
+    local itemHead = AceGUI:Create("Heading")
+    itemHead:SetFullWidth(true)
+    itemHead:SetText("Awarded Items (" .. #raid.items .. ")")
+    scroll:AddChild(itemHead)
+
+    for _, item in ipairs(raid.items) do
+        local ptsStr  = item.pointsSpent and ("  |cFFFFFF00" .. item.pointsSpent .. " pts|r") or ""
+        local respStr = item.response    and ("  |cFF888888[" .. item.response .. "]|r")       or ""
+        local itemRow = AceGUI:Create("Label")
+        itemRow:SetFullWidth(true)
+        itemRow:SetText("  " .. (item.itemLink or "Unknown") .. "  →  "
+            .. self:GetShortName(item.awardedTo) .. ptsStr .. respStr)
+        scroll:AddChild(itemRow)
+    end
+    if #raid.items == 0 then
+        local ni = AceGUI:Create("Label")
+        ni:SetFullWidth(true)
+        ni:SetText("  No items awarded.")
+        scroll:AddChild(ni)
+    end
+end
+
+---------------------------------------------------------------------------
+-- Settings tab
+---------------------------------------------------------------------------
+function PP:DrawSettingsTab(container)
+    container:ReleaseChildren()
+
+    local scroll = AceGUI:Create("ScrollFrame")
+    scroll:SetFullWidth(true)
+    scroll:SetFullHeight(true)
+    scroll:SetLayout("List")
+    container:AddChild(scroll)
+
+    -- ── Sandbox section ──────────────────────────────────────────────────
+    local sandboxHead = AceGUI:Create("Heading")
+    sandboxHead:SetFullWidth(true)
+    sandboxHead:SetText("Developer / Testing")
+    scroll:AddChild(sandboxHead)
+
+    if PP:IsSandbox() then
+        local banner = AceGUI:Create("Label")
+        banner:SetFullWidth(true)
+        banner:SetText("|cFFFFD100⚠ SANDBOX ACTIVE — simulating raid leader. Roster, raid, and loot changes are NOT saved to disk.|r\n")
+        scroll:AddChild(banner)
+    end
+
+    local sandboxDesc = AceGUI:Create("Label")
+    sandboxDesc:SetFullWidth(true)
+    sandboxDesc:SetText(
+        "Sandbox mode simulates being in an active raid as the raid leader without needing a real group.\n"
+     .. "Roster changes, raid data, and loot state made while active are |cFFFF4400not written to SavedVariables|r.\n"
+    )
+    scroll:AddChild(sandboxDesc)
+
+    local sandboxBtnGroup = AceGUI:Create("SimpleGroup")
+    sandboxBtnGroup:SetFullWidth(true)
+    sandboxBtnGroup:SetLayout("Flow")
+    scroll:AddChild(sandboxBtnGroup)
+
+    local sandboxBtn = AceGUI:Create("Button")
+    if PP:IsSandbox() then
+        sandboxBtn:SetText("|cFFFF6600Disable Sandbox|r")
+        sandboxBtn:SetWidth(160)
+        sandboxBtn:SetCallback("OnClick", function()
+            PP:DisableSandbox()
+        end)
+    else
+        sandboxBtn:SetText("Enable Sandbox")
+        sandboxBtn:SetWidth(160)
+        sandboxBtn:SetCallback("OnClick", function()
+            PP:EnableSandbox()
+        end)
+    end
+    sandboxBtnGroup:AddChild(sandboxBtn)
+
+    -- ── Sync section ─────────────────────────────────────────────────────
+    local syncHead = AceGUI:Create("Heading")
+    syncHead:SetFullWidth(true)
+    syncHead:SetText("Synchronisation")
+    scroll:AddChild(syncHead)
+
+    local syncDesc = AceGUI:Create("Label")
+    syncDesc:SetFullWidth(true)
+    syncDesc:SetText("Request a full roster and raid sync from any online officer in your current group.\n")
+    scroll:AddChild(syncDesc)
+
+    local syncGroup = AceGUI:Create("SimpleGroup")
+    syncGroup:SetFullWidth(true)
+    syncGroup:SetLayout("Flow")
+    scroll:AddChild(syncGroup)
+
+    local syncBtn = AceGUI:Create("Button")
+    syncBtn:SetText("Request Sync")
+    syncBtn:SetWidth(140)
+    syncBtn:SetCallback("OnClick", function()
+        if not IsInGroup() then
+            PP:Print("You must be in a group to request a sync.")
+        else
+            PP:RequestSync()
+            PP:Print("Sync requested.")
+        end
+    end)
+    syncGroup:AddChild(syncBtn)
+
+    if PP:CanModify() then
+        local broadcastBtn = AceGUI:Create("Button")
+        broadcastBtn:SetText("Broadcast Roster")
+        broadcastBtn:SetWidth(160)
+        broadcastBtn:SetCallback("OnClick", function()
+            if not IsInGroup() then
+                PP:Print("You must be in a group to broadcast.")
+            else
+                PP:BroadcastRoster()
+                PP:Print("Roster broadcast to group.")
+            end
+        end)
+        syncGroup:AddChild(broadcastBtn)
+    end
+
+    -- Loot Rules section
+    local lootRulesHead = AceGUI:Create("Heading")
+    lootRulesHead:SetFullWidth(true)
+    lootRulesHead:SetText("Loot Rules")
+    scroll:AddChild(lootRulesHead)
+
+    local tmogChk = AceGUI:Create("CheckBox")
+    tmogChk:SetFullWidth(true)
+    tmogChk:SetLabel("Allow Transmog rolls")
+    tmogChk:SetValue(PP.db.global.allowTransmogRolls ~= false)
+    tmogChk:SetCallback("OnValueChanged", function(_, _, val)
+        PP.db.global.allowTransmogRolls = val
+    end)
+    scroll:AddChild(tmogChk)
+
+    local tmogDesc = AceGUI:Create("Label")
+    tmogDesc:SetFullWidth(true)
+    tmogDesc:SetText("|cFFAAAAAA  When enabled, raid members see a Transmog button when voting on loot.\n  Takes effect on the next item posted.\n|r")
+    scroll:AddChild(tmogDesc)
+
+    -- Auto-pass in-game Epic+ rolls
+    local isLeader = PP:IsRaidLeaderOrAssist()
+    local autoPassChk = AceGUI:Create("CheckBox")
+    autoPassChk:SetFullWidth(true)
+    autoPassChk:SetLabel("Auto-pass in-game Epic+ loot rolls for non-leaders")
+    autoPassChk:SetValue(PP.db.global.autoPassEpicRolls == true)
+    if not isLeader then
+        autoPassChk:SetDisabled(true)
+    end
+    autoPassChk:SetCallback("OnValueChanged", function(_, _, val)
+        if not PP:IsRaidLeaderOrAssist() then return end
+        PP.db.global.autoPassEpicRolls = val
+        PP:BroadcastRaidSettings()
+    end)
+    scroll:AddChild(autoPassChk)
+
+    local autoPassDesc = AceGUI:Create("Label")
+    autoPassDesc:SetFullWidth(true)
+    if isLeader then
+        autoPassDesc:SetText("|cFFAAAAAA  When enabled, raiders who are not the raid leader or an officer will\n  automatically Pass on in-game loot rolls at Epic quality or higher.\n  Syncs to all group members when toggled.\n|r")
+    else
+        autoPassDesc:SetText("|cFFAAAAAA  Controlled by the raid leader. When active, you will automatically\n  Pass on in-game rolls for Epic+ items.\n|r")
+    end
+    scroll:AddChild(autoPassDesc)
+
+    -- Status section
+    local statusHead = AceGUI:Create("Heading")
+    statusHead:SetFullWidth(true)
+    statusHead:SetText("Status")
+    scroll:AddChild(statusHead)
+
+    local guildKey  = PP:GetActiveGuildKey()
+    local myGuild   = PP:GetPlayerGuild() or "|cFFAAAAAAnone|r"
+    local officer   = PP:IsOfficerOrHigher() and "|cFF00FF00Yes|r" or "|cFFFF4400No|r"
+    local canMod    = PP:CanModify()          and "|cFF00FF00Yes|r" or "|cFFFF4400No|r"
+    local gd        = PP:GetGuildData(guildKey)
+    local rVer      = gd and gd.rosterVersion or 0
+    local inGroup   = IsInGroup()             and "|cFF00FF00Yes|r" or "|cFFAAAAAA No|r"
+
+    local statusLabel = AceGUI:Create("Label")
+    statusLabel:SetFullWidth(true)
+    statusLabel:SetText(
+        "Active roster:  |cFFFFD100" .. guildKey .. "|r\n"
+     .. "My guild:  " .. myGuild .. "\n"
+     .. "Officer:  " .. officer .. "\n"
+     .. "Can modify:  " .. canMod .. "\n"
+     .. "Roster version:  |cFFFFFFFF" .. rVer .. "|r\n"
+     .. "In group:  " .. inGroup
+    )
+    scroll:AddChild(statusLabel)
+
+    -- Reset section
+    local resetHead = AceGUI:Create("Heading")
+    resetHead:SetFullWidth(true)
+    resetHead:SetText("Reset")
+    scroll:AddChild(resetHead)
+
+    local resetDesc = AceGUI:Create("Label")
+    resetDesc:SetFullWidth(true)
+    resetDesc:SetText(
+        "Reset clears all saved data for this character only (roster, raids, pending loot).\n"
+     .. "|cFFFF4400This cannot be undone.|r\n"
+    )
+    scroll:AddChild(resetDesc)
+
+    local resetBtn = AceGUI:Create("Button")
+    resetBtn:SetText("Reset Addon (Local)")
+    resetBtn:SetWidth(180)
+    resetBtn:SetCallback("OnClick", function()
+        StaticPopup_Show("PP_CONFIRM_RESET_ADDON")
+    end)
+    scroll:AddChild(resetBtn)
+end
+
+---------------------------------------------------------------------------
+-- Static popup for clear-roster confirmation
+---------------------------------------------------------------------------
+StaticPopupDialogs["PP_CONFIRM_REMOVE_PLAYER"] = {
+    text = "Remove this player from the roster?",
+    button1 = "Remove",
+    button2 = "Cancel",
+    OnAccept = function()
+        if PP._pendingRemovePlayer then
+            PP:RemoveFromRoster(PP._pendingRemovePlayer)
+            PP._pendingRemovePlayer = nil
+        end
+    end,
+    OnCancel = function()
+        PP._pendingRemovePlayer = nil
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+}
+
+StaticPopupDialogs["PP_CONFIRM_RANDOMIZE"] = {
+    text = "Randomize the roster order?\nThis will reassign all scores and |cFFFF4400cannot be undone|r.",
+    button1 = "Randomize",
+    button2 = "Cancel",
+    OnAccept = function()
+        PP:RandomizeRosterOrder()
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+}
+
+StaticPopupDialogs["PP_CONFIRM_CLEAR_ROSTER"] = {
+    text = "Are you sure you want to clear the entire Pirates Plunder roster?",
+    button1 = "Yes",
+    button2 = "No",
+    OnAccept = function()
+        PP:ClearRoster()
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+}
+
+StaticPopupDialogs["PP_CONFIRM_RESET_ADDON"] = {
+    text = "Reset ALL Pirates Plunder saved data for this character?\n|cFFFF4400This cannot be undone.|r",
+    button1 = "Reset",
+    button2 = "Cancel",
+    OnAccept = function()
+        PP:ResetAddon()
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+}

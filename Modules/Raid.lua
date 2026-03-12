@@ -1,0 +1,158 @@
+---------------------------------------------------------------------------
+-- Pirates Plunder – Raid Management
+---------------------------------------------------------------------------
+local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
+
+---------------------------------------------------------------------------
+-- Create a new raid
+---------------------------------------------------------------------------
+function PP:CreateRaid(raidName)
+    if not self:CanModify() then
+        self:Print("Only officers can create a raid.")
+        return
+    end
+    if self:HasActiveRaid() then
+        self:Print("A raid is already active. Close it before creating a new one.")
+        return
+    end
+    if not IsInRaid() then
+        self:Print("You must be in a raid group to create a raid.")
+        return
+    end
+
+    local raidID   = tostring(time()) .. "-" .. math.random(1000, 9999)
+    local leader   = self:GetPlayerFullName()
+    local gk       = self:GetActiveGuildKey()
+    local gd       = self:GetGuildData(gk)
+    raidName       = raidName or ("Raid " .. date("%Y-%m-%d %H:%M"))
+
+    gd.raids[raidID] = {
+        name      = raidName,
+        startTime = time(),
+        endTime   = nil,
+        leader    = leader,
+        guildKey  = gk,
+        items     = {},   -- { itemLink, itemID, awardedTo }
+        bosses    = {},   -- { encounterID, encounterName, time }
+        members   = {},   -- fullName => true
+        active    = true,
+    }
+    gd.activeRaidID = raidID
+
+    -- Snapshot current members
+    self:AutoPopulateRoster()
+    local raid = gd.raids[raidID]
+    for i = 1, GetNumGroupMembers() do
+        local name = GetRaidRosterInfo(i)
+        if name then raid.members[self:GetFullName(name)] = true end
+    end
+
+    self:Print("Raid created: " .. raidName)
+    self:BroadcastRaidCreate(raidID)
+    self:RefreshMainWindow()
+end
+
+---------------------------------------------------------------------------
+-- End / close a raid
+---------------------------------------------------------------------------
+function PP:EndRaid()
+    local raid, id = self:GetActiveRaid()
+    if not raid then return end
+
+    raid.active  = false
+    raid.endTime = time()
+    self:GetGuildData(self:GetActiveGuildKey()).activeRaidID = nil
+
+    -- Clear any pending loot
+    wipe(self.pendingLoot)
+    self:CloseLootPopups()
+
+    self:Print("Raid ended: " .. (raid.name or id))
+    self:BroadcastRaidClose(id)
+    self:RefreshMainWindow()
+    self:RefreshLootMasterWindow()
+end
+
+---------------------------------------------------------------------------
+-- Boss tracking inside a raid
+---------------------------------------------------------------------------
+function PP:AddBossToRaid(encounterID, encounterName)
+    local raid = self:GetActiveRaid()
+    if not raid then return end
+    raid.bosses[#raid.bosses + 1] = {
+        encounterID   = encounterID,
+        encounterName = encounterName or "Unknown",
+        time          = time(),
+    }
+end
+
+---------------------------------------------------------------------------
+-- Item tracking inside a raid
+---------------------------------------------------------------------------
+function PP:RecordItemAward(itemLink, itemID, awardedTo, pointsSpent, response)
+    local raid = self:GetActiveRaid()
+    if not raid then return end
+    raid.items[#raid.items + 1] = {
+        itemLink    = itemLink,
+        itemID      = itemID,
+        awardedTo   = awardedTo,
+        pointsSpent = pointsSpent or 0,
+        response    = response or PP.RESPONSE.NEED,
+        time        = time(),
+    }
+end
+
+---------------------------------------------------------------------------
+-- Check if the original raid leader is still present
+---------------------------------------------------------------------------
+function PP:CheckRaidLeaderPresent()
+    local raid = self:GetActiveRaid()
+    if not raid then return end
+
+    -- Find the current raid leader
+    local currentLeader = nil
+    for i = 1, GetNumGroupMembers() do
+        local name, rank = GetRaidRosterInfo(i)
+        if rank == 2 then
+            currentLeader = self:GetFullName(name)
+            break
+        end
+    end
+
+    -- If the original raid leader is no longer in the group, end the raid
+    if raid.leader then
+        local leaderPresent = false
+        for i = 1, GetNumGroupMembers() do
+            local name = GetRaidRosterInfo(i)
+            if name and self:GetFullName(name) == raid.leader then
+                leaderPresent = true
+                break
+            end
+        end
+        if not leaderPresent then
+            self:EndRaid()
+            self:Print("Raid ended – the raid leader left the group.")
+        end
+    end
+end
+
+---------------------------------------------------------------------------
+-- Raid history helpers
+---------------------------------------------------------------------------
+function PP:GetRaidHistory()
+    local list = {}
+    for id, raid in pairs(self:GetGuildRaids()) do
+        list[#list + 1] = {
+            id        = id,
+            name      = raid.name,
+            startTime = raid.startTime,
+            endTime   = raid.endTime,
+            leader    = raid.leader,
+            active    = raid.active,
+            bossCount = #raid.bosses,
+            itemCount = #raid.items,
+        }
+    end
+    table.sort(list, function(a, b) return a.startTime > b.startTime end)
+    return list
+end
