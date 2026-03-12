@@ -257,6 +257,32 @@ function PP:DrawLootMasterContent(container)
             itemGroup:AddChild(noResp)
         end
 
+        -- Who in the raid hasn't responded yet
+        if IsInRaid() then
+            local raidSet = self:GetRaidMemberSet()
+            local lootEntry = self.pendingLoot[item.key]
+            local nonResponders = {}
+            if lootEntry then
+                for fullName in pairs(raidSet) do
+                    if not lootEntry.responses[fullName] then
+                        nonResponders[#nonResponders + 1] = self:GetShortName(fullName)
+                    end
+                end
+            end
+            if #nonResponders > 0 then
+                table.sort(nonResponders)
+                local waitLabel = AceGUI:Create("Label")
+                waitLabel:SetFullWidth(true)
+                waitLabel:SetText("|cFFFFAA00Waiting: |r" .. table.concat(nonResponders, ", "))
+                itemGroup:AddChild(waitLabel)
+            elseif lootEntry and next(raidSet) then
+                local allLabel = AceGUI:Create("Label")
+                allLabel:SetFullWidth(true)
+                allLabel:SetText("|cFF00FF00All raid members have responded.|r")
+                itemGroup:AddChild(allLabel)
+            end
+        end
+
         -- Cancel button
         local cancelBtn = AceGUI:Create("Button")
         cancelBtn:SetText("Cancel")
@@ -408,9 +434,24 @@ function PP:RefreshLootResponseFrame()
 
     local me = self:GetPlayerFullName()
     local yOffset = 0
-    local rowHeight = 50
     local btnWidth, btnHeight = 72, 20
-    local itemCount = 0
+    local iconPad    = 8     -- left padding before the icon
+    local iconWidth  = 28
+    local textGap    = 4     -- gap between icon right edge and text start
+    local textX      = iconPad + iconWidth + textGap  -- 40
+    local textH      = 30    -- fixed text zone height (fits ~2 wrapped lines)
+    local btnGap     = 4     -- vertical gap between text zone and buttons
+    local rowPadBot  = 6     -- bottom padding per row
+    local rowHeight  = textH + btnGap + btnHeight + rowPadBot  -- 60
+    local itemCount  = 0
+
+    -- Frame width depends on whether transmog is globally enabled.
+    -- textX + N buttons * btnWidth + (N-1) gaps * 6 + outer margins
+    local tmogGlobal = PP.db.global.allowTransmogRolls ~= false
+    local numBtns = tmogGlobal and 4 or 3
+    local contentWidth = textX + numBtns * btnWidth + (numBtns - 1) * 6
+    local frameWidth   = contentWidth + iconPad + 24   -- matching right margin
+    f:SetWidth(frameWidth)
 
     for key, entry in pairs(self.pendingLoot) do
         if not entry.awarded then
@@ -419,14 +460,30 @@ function PP:RefreshLootResponseFrame()
 
             -- Row frame for this item
             local row = CreateFrame("Frame", nil, container)
-            row:SetSize(346, rowHeight)
+            row:SetSize(contentWidth, rowHeight)
             row:SetPoint("TOPLEFT", container, "TOPLEFT", 0, -yOffset)
 
-            -- Item text with tooltip
+            -- Item icon (with left padding)
+            local iconTex = (entry.itemID and C_Item.GetItemIconByID(entry.itemID))
+            if not iconTex and entry.itemLink then
+                local _, _, _, _, tex = GetItemInfoInstant(entry.itemLink)
+                iconTex = tex
+            end
+            if iconTex then
+                local icon = row:CreateTexture(nil, "OVERLAY")
+                icon:SetSize(iconWidth, iconWidth)
+                icon:SetPoint("TOPLEFT", row, "TOPLEFT", iconPad, -1)
+                icon:SetTexture(iconTex)
+                icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+            end
+
+            -- Item text: fixed height so buttons always sit below it
             local itemText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-            itemText:SetPoint("TOPLEFT", 0, 0)
-            itemText:SetWidth(340)
+            itemText:SetPoint("TOPLEFT", row, "TOPLEFT", textX, 0)
+            itemText:SetWidth(contentWidth - textX)
+            itemText:SetHeight(textH)
             itemText:SetJustifyH("LEFT")
+            itemText:SetJustifyV("TOP")
             local displayText = entry.itemLink or "Unknown Item"
             if myResponse then
                 local color = myResponse == PP.RESPONSE.NEED     and "|cFF00FF00"
@@ -448,12 +505,13 @@ function PP:RefreshLootResponseFrame()
             end)
             row:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
-            -- Response buttons (smaller)
+            -- Response buttons: anchored below the fixed text zone, never overlap it
+            local btnY = -(textH + btnGap)
             local capturedKey = key
 
             local needBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
             needBtn:SetSize(btnWidth, btnHeight)
-            needBtn:SetPoint("TOPLEFT", row, "TOPLEFT", 0, -18)
+            needBtn:SetPoint("TOPLEFT", row, "TOPLEFT", textX, btnY)
             needBtn:SetText("Need")
             if myResponse == PP.RESPONSE.NEED then
                 needBtn:GetFontString():SetTextColor(0, 1, 0)
@@ -491,7 +549,6 @@ function PP:RefreshLootResponseFrame()
 
             local passBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
             passBtn:SetSize(btnWidth, btnHeight)
-            -- Anchor directly after the last visible button so there's no gap
             if showTmog then
                 passBtn:SetPoint("LEFT", tmogBtn, "RIGHT", 6, 0)
             else
