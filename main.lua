@@ -434,6 +434,13 @@ function PiratesPlunder:CheckActiveRaid()
     if self:HasActiveRaid() and not IsInGroup() then
         self:EndRaid()
     end
+    -- Clear stale pending loot when there is no active raid
+    if not self:HasActiveRaid() and next(self.pendingLoot) ~= nil then
+        wipe(self.pendingLoot)
+        self:SavePendingLoot()
+        self:RefreshLootResponseFrame()
+        self:RefreshLootMasterWindow()
+    end
 end
 
 -- Generate a unique key from an item link + timestamp
@@ -462,6 +469,11 @@ function PiratesPlunder:SavePendingLoot()
 end
 
 function PiratesPlunder:RestorePendingLoot()
+    -- Don't restore stale loot if there is no active raid
+    if not self:HasActiveRaid() then
+        self.db.global.pendingLootCache = {}
+        return
+    end
     local cache = self.db and self.db.global.pendingLootCache
     if not cache then return end
     for key, saved in pairs(cache) do

@@ -174,8 +174,14 @@ function PP:GetSortedRoster()
     return list
 end
 
--- Get current raid member full names as a set
+-- Get current raid member full names as a set.
+-- In sandbox mode returns just the local player so non-responder tracking works.
 function PP:GetRaidMemberSet()
+    if self._sandbox then
+        local set = {}
+        set[self:GetPlayerFullName()] = true
+        return set
+    end
     local set = {}
     if not IsInRaid() then return set end
     for i = 1, GetNumGroupMembers() do

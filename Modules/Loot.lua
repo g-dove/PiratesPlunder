@@ -92,7 +92,6 @@ function PP:ExpressInterest(key, response)
         score    = score,
     })
 
-    self:Print("You expressed " .. response .. " for this item.")
     self:SavePendingLoot()
     self:RefreshLootResponseFrame()
 end
