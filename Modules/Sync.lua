@@ -7,6 +7,8 @@ local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 -- Send a structured message to the raid / party
 ---------------------------------------------------------------------------
 function PP:SendAddonMessage(msgType, data, target)
+    -- Never broadcast real messages while in sandbox mode
+    if self._sandbox then return end
     local payload = self:Serialize(msgType, data)
     if target then
         self:SendCommMessage(PP.COMM_PREFIX, payload, "WHISPER", target)

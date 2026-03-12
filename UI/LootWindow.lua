@@ -257,8 +257,8 @@ function PP:DrawLootMasterContent(container)
             itemGroup:AddChild(noResp)
         end
 
-        -- Who in the raid hasn't responded yet
-        if IsInRaid() then
+        -- Who in the raid hasn't responded yet (also works in sandbox)
+        if IsInRaid() or PP:IsSandbox() then
             local raidSet = self:GetRaidMemberSet()
             local lootEntry = self.pendingLoot[item.key]
             local nonResponders = {}
