@@ -86,28 +86,37 @@ function PP:DrawRosterTab(container)
     scroll:SetLayout("List")
     container:AddChild(scroll)
 
-    -- Guild selector dropdown (shown when multiple guild rosters are saved)
-    local guildKeys = {}
-    for gk in pairs(self.db.global.guilds) do
-        guildKeys[#guildKeys + 1] = gk
-    end
-    if #guildKeys > 1 then
+    -- ── Roster selector ──────────────────────────────────────────────────
+    if not PP:IsSandbox() then
         local ddGroup = AceGUI:Create("SimpleGroup")
         ddGroup:SetFullWidth(true)
         ddGroup:SetLayout("Flow")
         scroll:AddChild(ddGroup)
+
         local dd = AceGUI:Create("Dropdown")
-        dd:SetLabel("Guild Roster")
-        dd:SetWidth(240)
-        local items = {}
-        for _, gk in ipairs(guildKeys) do items[gk] = gk end
-        dd:SetList(items)
+        dd:SetLabel("Active Roster")
+        dd:SetWidth(220)
+        local ddItems = {}
+        for gk in pairs(self.db.global.guilds) do
+            ddItems[gk] = PP:GetRosterDisplayName(gk)
+        end
+        dd:SetList(ddItems)
         dd:SetValue(PP:GetActiveGuildKey())
         dd:SetCallback("OnValueChanged", function(_, _, val)
             PP._activeGuildKey = val
             PP:DrawRosterTab(container)
         end)
         ddGroup:AddChild(dd)
+
+        if canModify then
+            local newBtn = AceGUI:Create("Button")
+            newBtn:SetText("New Roster")
+            newBtn:SetWidth(110)
+            newBtn:SetCallback("OnClick", function()
+                StaticPopup_Show("PP_CREATE_ROSTER")
+            end)
+            ddGroup:AddChild(newBtn)
+        end
     end
 
     -- Top bar: add player + actions
@@ -336,22 +345,21 @@ function PP:DrawRaidsTab(container)
     scroll:SetLayout("List")
     container:AddChild(scroll)
 
-    -- Guild selector dropdown (shown when multiple guild rosters are saved)
-    local guildKeys = {}
-    for gk in pairs(self.db.global.guilds) do
-        guildKeys[#guildKeys + 1] = gk
-    end
-    if #guildKeys > 1 then
+    -- ── Roster selector ──────────────────────────────────────────────────
+    if not PP:IsSandbox() then
         local ddGroup = AceGUI:Create("SimpleGroup")
         ddGroup:SetFullWidth(true)
         ddGroup:SetLayout("Flow")
         scroll:AddChild(ddGroup)
+
         local dd = AceGUI:Create("Dropdown")
-        dd:SetLabel("Guild Roster")
-        dd:SetWidth(240)
-        local items = {}
-        for _, gk in ipairs(guildKeys) do items[gk] = gk end
-        dd:SetList(items)
+        dd:SetLabel("Active Roster")
+        dd:SetWidth(220)
+        local ddItems = {}
+        for gk in pairs(self.db.global.guilds) do
+            ddItems[gk] = PP:GetRosterDisplayName(gk)
+        end
+        dd:SetList(ddItems)
         dd:SetValue(PP:GetActiveGuildKey())
         dd:SetCallback("OnValueChanged", function(_, _, val)
             PP._activeGuildKey = val
@@ -595,7 +603,68 @@ function PP:DrawSettingsTab(container)
         syncGroup:AddChild(broadcastBtn)
     end
 
-    -- Loot Rules section
+    -- ── Manage Custom Rosters section ───────────────────────────────────────
+    local manageHead = AceGUI:Create("Heading")
+    manageHead:SetFullWidth(true)
+    manageHead:SetText("Manage Custom Rosters")
+    scroll:AddChild(manageHead)
+
+    -- Collect only custom (non-guild) roster keys
+    local customKeys = {}
+    for gk in pairs(PP.db.global.guilds) do
+        if PP:IsCustomRoster(gk) then
+            customKeys[#customKeys + 1] = gk
+        end
+    end
+    table.sort(customKeys, function(a, b)
+        return PP:GetRosterDisplayName(a) < PP:GetRosterDisplayName(b)
+    end)
+
+    if #customKeys == 0 then
+        local noCustom = AceGUI:Create("Label")
+        noCustom:SetFullWidth(true)
+        noCustom:SetText("|cFFAAAAAA  No custom rosters yet. Use the 'New Roster' button on the Roster tab to create one.\n|r")
+        scroll:AddChild(noCustom)
+    else
+        local manageRow = AceGUI:Create("SimpleGroup")
+        manageRow:SetFullWidth(true)
+        manageRow:SetLayout("Flow")
+        scroll:AddChild(manageRow)
+
+        local manageDd = AceGUI:Create("Dropdown")
+        manageDd:SetLabel("Custom Roster")
+        manageDd:SetWidth(180)
+        local manageItems = {}
+        for _, gk in ipairs(customKeys) do
+            manageItems[gk] = PP:GetRosterDisplayName(gk)
+        end
+        manageDd:SetList(manageItems)
+        manageDd:SetValue(customKeys[1])
+        manageRow:AddChild(manageDd)
+
+        local renameBox = AceGUI:Create("EditBox")
+        renameBox:SetLabel("New Name")
+        renameBox:SetWidth(150)
+        renameBox:SetText(PP:GetRosterDisplayName(customKeys[1]))
+        manageDd:SetCallback("OnValueChanged", function(_, _, val)
+            renameBox:SetText(PP:GetRosterDisplayName(val))
+        end)
+        manageRow:AddChild(renameBox)
+
+        local renameBtn = AceGUI:Create("Button")
+        renameBtn:SetText("Rename")
+        renameBtn:SetWidth(90)
+        renameBtn:SetCallback("OnClick", function()
+            local selectedKey = manageDd:GetValue()
+            local newName = renameBox:GetText()
+            if selectedKey and newName and newName:trim() ~= "" then
+                PP:RenameCustomRoster(selectedKey, newName:trim())
+            end
+        end)
+        manageRow:AddChild(renameBtn)
+    end
+
+    -- ── Loot Rules section
     local lootRulesHead = AceGUI:Create("Heading")
     lootRulesHead:SetFullWidth(true)
     lootRulesHead:SetText("Loot Rules")
@@ -657,7 +726,7 @@ function PP:DrawSettingsTab(container)
     local statusLabel = AceGUI:Create("Label")
     statusLabel:SetFullWidth(true)
     statusLabel:SetText(
-        "Active roster:  |cFFFFD100" .. guildKey .. "|r\n"
+        "Active roster:  |cFFFFD100" .. PP:GetRosterDisplayName(guildKey) .. "|r\n"
      .. "My guild:  " .. myGuild .. "\n"
      .. "Officer:  " .. officer .. "\n"
      .. "Can modify:  " .. canMod .. "\n"
@@ -732,6 +801,23 @@ StaticPopupDialogs["PP_CONFIRM_CLEAR_ROSTER"] = {
     timeout = 0,
     whileDead = true,
     hideOnEscape = true,
+}
+
+StaticPopupDialogs["PP_CREATE_ROSTER"] = {
+    text = "Enter a name for the new roster:",
+    button1 = "Create",
+    button2 = "Cancel",
+    hasEditBox = 1,
+    OnAccept = function(dialog)
+        local name = dialog.editBox:GetText()
+        if name and name:trim() ~= "" then
+            PP:CreateCustomRoster(name)
+        end
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+    preferredIndex = 3,
 }
 
 StaticPopupDialogs["PP_CONFIRM_RESET_ADDON"] = {
