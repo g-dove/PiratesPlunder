@@ -166,18 +166,6 @@ function PP:DrawRosterTab(container)
         bulkRow:SetLayout("Flow")
         scroll:AddChild(bulkRow)
 
-        local plusOneBtn = AceGUI:Create("Button")
-        plusOneBtn:SetText("+1 to Group")
-        plusOneBtn:SetWidth(120)
-        plusOneBtn:SetCallback("OnClick", function()
-            if not IsInGroup() then
-                PP:Print("You must be in a group.")
-                return
-            end
-            PP:AddScoreToRaidMembers(1)
-        end)
-        bulkRow:AddChild(plusOneBtn)
-
         local bulkAmountBox = AceGUI:Create("EditBox")
         bulkAmountBox:SetLabel("Custom Amount")
         bulkAmountBox:SetWidth(120)
@@ -200,6 +188,18 @@ function PP:DrawRosterTab(container)
             PP:AddScoreToRaidMembers(amt)
         end)
         bulkRow:AddChild(applyBtn)
+
+        local plusOneBtn = AceGUI:Create("Button")
+        plusOneBtn:SetText("+1 to Group")
+        plusOneBtn:SetWidth(120)
+        plusOneBtn:SetCallback("OnClick", function()
+            if not IsInGroup() then
+                PP:Print("You must be in a group.")
+                return
+            end
+            PP:AddScoreToRaidMembers(1)
+        end)
+        bulkRow:AddChild(plusOneBtn)
 
         local bulkDesc = AceGUI:Create("Label")
         bulkDesc:SetFullWidth(true)
@@ -249,6 +249,14 @@ function PP:DrawRosterTab(container)
     -- Player rows
     local sorted  = self:GetSortedRoster()
     local raidSet = self:GetRaidMemberSet()
+
+    if not canModify then
+        local padTop = AceGUI:Create("Label")
+        padTop:SetFullWidth(true)
+        padTop:SetText(" ")
+        padTop:SetHeight(5)
+        scroll:AddChild(padTop)
+    end
 
     for idx, entry in ipairs(sorted) do
         local row = AceGUI:Create("SimpleGroup")
@@ -321,6 +329,14 @@ function PP:DrawRosterTab(container)
         end
 
         scroll:AddChild(row)
+        
+        if not canModify then
+            local padBot = AceGUI:Create("Label")
+            padBot:SetFullWidth(true)
+            padBot:SetText(" ")
+            padBot:SetHeight(10)
+            scroll:AddChild(padBot)
+        end
     end
 
     if #sorted == 0 then

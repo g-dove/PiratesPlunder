@@ -175,16 +175,15 @@ function PiratesPlunder:SlashCommand(input)
         end
     elseif input == "sandbox mod" or input == "s m" then
         if not self:IsSandbox() then
-            self:Print("Sandbox is not active. Run /pp sandbox first.")
-        else
-            self._sandboxModOverride = not self._sandboxModOverride
-            if self._sandboxModOverride then
-                self:Print("|cFFFFD100[Sandbox] CanModify override: ON — acting as officer.|r")
-            else
-                self:Print("|cFF888888[Sandbox] CanModify override: OFF — acting as non-officer.|r")
-            end
-            self:RefreshMainWindow()
+            self:EnableSandbox()
         end
+        self._sandboxModOverride = not self._sandboxModOverride
+        if self._sandboxModOverride then
+            self:Print("|cFFFFD100[Sandbox] CanModify override: ON — acting as officer.|r")
+        else
+            self:Print("|cFF888888[Sandbox] CanModify override: OFF — acting as non-officer.|r")
+        end
+        self:RefreshMainWindow()
     elseif input:match("^setrank%s+(%d+)$") then
         local n = tonumber(input:match("^setrank%s+(%d+)$"))
         self.db.global.officerRankThreshold = n
