@@ -156,8 +156,28 @@ function PiratesPlunder:SlashCommand(input)
     elseif input == "help" then
         self:Print("/pp – Toggle main window")
         self:Print("/pploot – Toggle loot-master window")
+        self:Print("/pp sandbox – Toggle sandbox mode")
+        self:Print("/pp sandbox mod – Toggle canModify override in sandbox")
         self:Print("/pp status – Show officer detection info")
         self:Print("/pp bagdebug – Diagnose alt+right-click bag hook")
+    elseif input == "sandbox" then
+        if self:IsSandbox() then
+            self:DisableSandbox()
+        else
+            self:EnableSandbox()
+        end
+    elseif input == "sandbox mod" then
+        if not self:IsSandbox() then
+            self:Print("Sandbox is not active. Run /pp sandbox first.")
+        else
+            self._sandboxModOverride = not self._sandboxModOverride
+            if self._sandboxModOverride then
+                self:Print("|cFFFFD100[Sandbox] CanModify override: ON — acting as officer.|r")
+            else
+                self:Print("|cFF888888[Sandbox] CanModify override: OFF — acting as non-officer.|r")
+            end
+            self:RefreshMainWindow()
+        end
     elseif input:match("^setrank%s+(%d+)$") then
         local n = tonumber(input:match("^setrank%s+(%d+)$"))
         self.db.global.officerRankThreshold = n
@@ -281,6 +301,7 @@ end
 function PiratesPlunder:EnableSandbox()
     if self._sandbox then return end
     self._sandbox = true
+    self._sandboxModOverride = true  -- default: act as officer in sandbox
     -- Build a fresh in-memory guild data block with a pre-created active raid
     self._sandboxData = {
         roster        = {},
@@ -298,7 +319,24 @@ function PiratesPlunder:EnableSandbox()
         guildKey       = "__sandbox__",
         memberSnapshot = {},
     }
+    -- Populate a fake roster of 10 players including the local player
+    local realm = GetRealmName():gsub("%s+", "") or "TestRealm"
+    local myName = UnitName("player") or "Player"
+    local fakeNames = { myName, "Aragorn", "Legolas", "Gimli", "Gandalf",
+                        "Boromir", "Frodo", "Samwise", "Pippin", "Merry" }
+    local roster = self._sandboxData.roster
+    for i, name in ipairs(fakeNames) do
+        local fullName = name .. "-" .. realm
+        roster[fullName] = {
+            name      = name,
+            realm     = realm,
+            fullName  = fullName,
+            score     = math.floor((11 - i) * 10 + math.random(0, 9)),
+            joinedAt  = GetTime(),
+        }
+    end
     self:Print("|cFFFFD100[Sandbox] Enabled. Simulating raid leader in an active raid. Nothing will be saved to disk.|r")
+    self:Print("|cFFFFD100[Sandbox] /pp sandbox mod toggles CanModify override (currently ON).|r")
     self:RefreshMainWindow()
 end
 
@@ -306,6 +344,7 @@ function PiratesPlunder:DisableSandbox()
     if not self._sandbox then return end
     self._sandbox     = false
     self._sandboxData = nil
+    self._sandboxModOverride = nil
     -- Discard any loot state accumulated during the sandbox session
     wipe(self.pendingLoot)
     wipe(self.pendingTrades)
@@ -395,7 +434,7 @@ function PiratesPlunder:IsRaidLeaderOrAssist()
 end
 
 function PiratesPlunder:CanModify()
-    if self._sandbox then return true end
+    if self._sandbox then return self._sandboxModOverride ~= false end
     -- Must have officer or raid-leader/assistant role
     if not (self:IsOfficerOrHigher() or self:IsRaidLeaderOrAssist()) then
         return false
