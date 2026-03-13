@@ -24,4 +24,5 @@ Modules\Loot.lua
 Modules\Sync.lua
 Modules\Trade.lua
 UI\MainWindow.lua
+UI\VersionCheckWindow.lua
 UI\LootWindow.lua

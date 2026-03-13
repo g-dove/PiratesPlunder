@@ -69,13 +69,29 @@ function PP:OnCommReceived(prefix, message, distribution, sender)
 
     elseif msgType == PP.MSG.RAID_SETTINGS then
         self:HandleRaidSettings(data, sender)
+
+    elseif msgType == PP.MSG.VERSION_REQUEST then
+        self:HandleVersionRequest(sender)
+
+    elseif msgType == PP.MSG.VERSION_REPLY then
+        self:HandleVersionReply(data, sender)
     end
 end
 
 ---------------------------------------------------------------------------
--- Broadcast helpers
+-- Version check handlers
 ---------------------------------------------------------------------------
-function PP:BroadcastRaidSettings()
+
+-- Received a version-check broadcast: reply with our own version via whisper.
+function PP:HandleVersionRequest(sender)
+    self:SendAddonMessage(PP.MSG.VERSION_REPLY, { version = PP.VERSION }, self:GetShortName(sender))
+end
+
+-- Received a version reply: update the open version-check window if any.
+function PP:HandleVersionReply(data, sender)
+    if not data or not data.version then return end
+    self:UpdateVersionCheckWindow(sender, tostring(data.version))
+end
     if not IsInGroup() then return end
     self:SendAddonMessage(PP.MSG.RAID_SETTINGS, {
         autoPassEpicRolls = self.db.global.autoPassEpicRolls,
