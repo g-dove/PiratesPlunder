@@ -276,7 +276,13 @@ function PP:DrawRosterTab(container)
         local bulkAmountBox = AceGUI:Create("EditBox")
         bulkAmountBox:SetLabel("Amount")
         bulkAmountBox:SetWidth(100)
-        bulkAmountBox:SetText("1")
+        bulkAmountBox:SetText(PP._groupAmountValue or "1")
+        bulkAmountBox:SetCallback("OnTextChanged", function(_, _, text)
+            PP._groupAmountValue = text
+        end)
+        bulkAmountBox:SetCallback("OnEnterPressed", function(_, _, text)
+            PP._groupAmountValue = text
+        end)
         groupRow:AddChild(bulkAmountBox)
 
         local applyBtn = AceGUI:Create("Button")
