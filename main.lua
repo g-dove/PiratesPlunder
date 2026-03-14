@@ -34,6 +34,7 @@ PiratesPlunder.MSG = {
     LOOT_CANCEL    = "LOT_CAN",
     LOOT_UPDATE    = "LOT_UPD",
     RAID_SETTINGS  = "RAD_SET",
+    RAID_DELETE    = "RAD_DEL",
     VERSION_REQUEST = "VER_REQ",
     VERSION_REPLY   = "VER_REP",
 }
@@ -124,6 +125,9 @@ function PiratesPlunder:OnInitialize()
     self.lootPopups       = {}  -- key => frame
     self.lootResponseFrame = nil -- unified multi-item response popup
     self.lootReopenBtn    = nil -- small reopen button shown when response frame is hidden
+    self.awardedLootWindow = nil -- per-player awarded loot history window
+    self._awardedLootTarget = nil -- fullName currently shown in the awarded loot window
+    self._pendingDeleteRaidID = nil -- raidID pending delete confirmation
     self._isOfficer       = nil -- cached; nil = not yet determined
     self._wasInGroup      = IsInGroup() -- tracks group membership for auto-sync
     self._activeGuildKey  = nil -- set in OnEnable / OnPlayerEnteringWorld
@@ -410,6 +414,8 @@ function PiratesPlunder:EnableSandbox()
         name           = "[Sandbox] Test Raid",
         startedAt      = GetTime(),
         active         = true,
+        items          = {},  -- required by RecordItemAward
+        bosses         = {},  -- required by ShowRaidDetail / AddBossToRaid
         bossKills      = {},
         lootAwarded    = {},
         guildKey       = "__sandbox__",

@@ -290,14 +290,6 @@ end
 -- Add an item to the loot queue (called by alt+right-click or manual link)
 function PP:AddToLootQueue(itemLink)
     if not itemLink or itemLink:trim() == "" then return end
-    -- Avoid exact duplicates in the queue
-    for _, entry in ipairs(self.lootQueue) do
-        if entry.itemLink == itemLink then
-            self:Print("Already queued: " .. itemLink)
-            if not self.lootMasterWindow then self:CreateLootMasterWindow() end
-            return
-        end
-    end
     self.lootQueue[#self.lootQueue + 1] = { itemLink = itemLink }
     if not self.lootMasterWindow then
         self:CreateLootMasterWindow()

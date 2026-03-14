@@ -21,8 +21,10 @@ main.lua
 Modules\Roster.lua
 Modules\Raid.lua
 Modules\Loot.lua
+Modules\AwardedLoot.lua
 Modules\Sync.lua
 Modules\Trade.lua
 UI\MainWindow.lua
 UI\VersionCheckWindow.lua
 UI\LootWindow.lua
+UI\AwardedLootWindow.lua

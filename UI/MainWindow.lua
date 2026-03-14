@@ -353,6 +353,13 @@ function PP:DrawRosterTab(container)
     h4:SetWidth(60)
     headerRow:AddChild(h4)
 
+    if canModify then
+        local h5 = AceGUI:Create("Label")
+        h5:SetText("|cFFFFD100Actions|r")
+        h5:SetWidth(105)
+        headerRow:AddChild(h5)
+    end
+
     -- Player rows
     local sorted  = self:GetSortedRoster()
     local raidSet = self:GetRaidMemberSet()
@@ -430,6 +437,18 @@ function PP:DrawRosterTab(container)
         scoreLabel:SetText("|cFFFFFF00" .. tostring(entry.score) .. "|r")
         scoreLabel:SetWidth(60)
         row:AddChild(scoreLabel)
+
+        -- Loot History button – only shown to users with canModify access
+        if canModify then
+            local histBtn = AceGUI:Create("Button")
+            histBtn:SetText("Loot History")
+            histBtn:SetWidth(105)
+            local capturedFull = entry.fullName
+            histBtn:SetCallback("OnClick", function()
+                PP:ShowAwardedLootWindow(capturedFull)
+            end)
+            row:AddChild(histBtn)
+        end
 
         scroll:AddChild(row)
 
@@ -613,6 +632,24 @@ function PP:ShowRaidDetail(raidID)
         .. "\nStarted: " .. startStr
         .. "\nEnded: " .. endStr)
     scroll:AddChild(info)
+
+    -- Delete Raid button (officer only, not available in sandbox)
+    if self:IsOfficerOrHigher() and not self:IsSandbox() then
+        local warnLbl = AceGUI:Create("Label")
+        warnLbl:SetFullWidth(true)
+        warnLbl:SetText("|cFFFF4400Warning: deleting a raid permanently removes all its loot and boss records. This cannot be undone and will sync to all online raid members.|r")
+        scroll:AddChild(warnLbl)
+
+        local deleteBtn = AceGUI:Create("Button")
+        deleteBtn:SetText("|cFFFF4400Delete Raid|r")
+        deleteBtn:SetWidth(130)
+        local capturedID = raidID
+        deleteBtn:SetCallback("OnClick", function()
+            PP._pendingDeleteRaidID = capturedID
+            StaticPopup_Show("PP_CONFIRM_DELETE_RAID")
+        end)
+        scroll:AddChild(deleteBtn)
+    end
 
     -- Bosses
     local bossHead = AceGUI:Create("Heading")
@@ -974,6 +1011,24 @@ StaticPopupDialogs["PP_CONFIRM_DELETE_ROSTER"] = {
     end,
     OnCancel = function()
         PP._pendingDeleteRoster = nil
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+}
+
+StaticPopupDialogs["PP_CONFIRM_DELETE_RAID"] = {
+    text = "Permanently delete this raid?\n\n|cFFFF4400All loot and boss records will be erased for you and all online raid members. This cannot be undone.|r",
+    button1 = "Delete",
+    button2 = "Cancel",
+    OnAccept = function()
+        if PP._pendingDeleteRaidID then
+            PP:DeleteRaid(PP._pendingDeleteRaidID)
+            PP._pendingDeleteRaidID = nil
+        end
+    end,
+    OnCancel = function()
+        PP._pendingDeleteRaidID = nil
     end,
     timeout = 0,
     whileDead = true,
