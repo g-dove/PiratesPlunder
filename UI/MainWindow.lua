@@ -1017,6 +1017,32 @@ StaticPopupDialogs["PP_CONFIRM_DELETE_ROSTER"] = {
     hideOnEscape = true,
 }
 
+StaticPopupDialogs["PP_CONTINUE_RAID"] = {
+    text = "Pirates Plunder\n\nWould you like to continue the active raid?",
+    button1 = "Continue Raid",
+    button2 = "End Raid",
+    OnAccept = function()
+        local id = PP._pendingContinueRaidID
+        if id then
+            local gk = PP:GetActiveGuildKey()
+            local gd = PP:GetGuildData(gk)
+            if gd and gd.raids and gd.raids[id] then
+                gd.raids[id].leader = PP:GetPlayerFullName()
+                PP:Print("You are now leading the raid: " .. (gd.raids[id].name or id))
+            end
+            PP._pendingContinueRaidID = nil
+        end
+    end,
+    OnCancel = function()
+        PP._pendingContinueRaidID = nil
+        PP:EndRaid()
+        PP:Print("Raid ended.")
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = false,
+}
+
 StaticPopupDialogs["PP_CONFIRM_DELETE_RAID"] = {
     text = "Permanently delete this raid?\n\n|cFFFF4400All loot and boss records will be erased for you and all online raid members. This cannot be undone.|r",
     button1 = "Delete",

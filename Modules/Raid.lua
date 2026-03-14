@@ -149,34 +149,44 @@ end
 -- Check if the original raid leader is still present
 ---------------------------------------------------------------------------
 function PP:CheckRaidLeaderPresent()
-    local raid = self:GetActiveRaid()
+    local raid, id = self:GetActiveRaid()
     if not raid then return end
 
-    -- Find the current raid leader
-    local currentLeader = nil
+    -- If a continuation prompt is already pending, don't fire again
+    if self._pendingContinueRaidID then return end
+
+    -- Check if the original raid leader is still in the group
+    local leaderPresent = false
+    for i = 1, GetNumGroupMembers() do
+        local name = GetRaidRosterInfo(i)
+        if name and self:GetFullName(name) == raid.leader then
+            leaderPresent = true
+            break
+        end
+    end
+    if leaderPresent then return end
+
+    -- Original leader is gone. Find the new raid leader (rank == 2).
+    local newLeader = nil
     for i = 1, GetNumGroupMembers() do
         local name, rank = GetRaidRosterInfo(i)
         if rank == 2 then
-            currentLeader = self:GetFullName(name)
+            newLeader = self:GetFullName(name)
             break
         end
     end
 
-    -- If the original raid leader is no longer in the group, end the raid
-    if raid.leader then
-        local leaderPresent = false
-        for i = 1, GetNumGroupMembers() do
-            local name = GetRaidRosterInfo(i)
-            if name and self:GetFullName(name) == raid.leader then
-                leaderPresent = true
-                break
-            end
-        end
-        if not leaderPresent then
-            self:EndRaid()
-            self:Print("Raid ended – the raid leader left the group.")
-        end
+    local me = self:GetPlayerFullName()
+    if newLeader and newLeader == me then
+        -- Show the continuation prompt to the new raid leader
+        self._pendingContinueRaidID = id
+        StaticPopup_Show("PP_CONTINUE_RAID")
+    elseif not newLeader then
+        -- No raid leader at all; end the raid immediately
+        self:EndRaid()
+        self:Print("Raid ended – the raid leader left the group.")
     end
+    -- If someone else is the new leader, their client handles the prompt
 end
 
 ---------------------------------------------------------------------------

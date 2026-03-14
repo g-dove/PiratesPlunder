@@ -128,6 +128,7 @@ function PiratesPlunder:OnInitialize()
     self.awardedLootWindow = nil -- per-player awarded loot history window
     self._awardedLootTarget = nil -- fullName currently shown in the awarded loot window
     self._pendingDeleteRaidID = nil -- raidID pending delete confirmation
+    self._pendingContinueRaidID = nil -- raidID awaiting new-leader continuation prompt
     self._isOfficer       = nil -- cached; nil = not yet determined
     self._wasInGroup      = IsInGroup() -- tracks group membership for auto-sync
     self._activeGuildKey  = nil -- set in OnEnable / OnPlayerEnteringWorld
