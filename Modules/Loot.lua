@@ -11,8 +11,8 @@ function PP:PostLoot(itemLink)
         self:Print("No active raid.")
         return
     end
-    if not self:CanModify() and not self:IsRaidLeaderOrAssist() then
-        self:Print("Only officers or raid leader/assistants can post loot.")
+    if not self:CanPostLoot() then
+        self:Print("Only the raid leader can post loot for this roster.")
         return
     end
 

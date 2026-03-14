@@ -225,15 +225,6 @@ function PP:DrawRosterTab(container)
         end)
         selRow:AddChild(scoreBox)
 
-        local plusBtn = AceGUI:Create("Button")
-        plusBtn:SetText("+1")
-        plusBtn:SetWidth(50)
-        plusBtn:SetDisabled(not hasSelection)
-        plusBtn:SetCallback("OnClick", function()
-            if selEntry then PP:SetPlayerScore(sel, selEntry.score + 1) end
-        end)
-        selRow:AddChild(plusBtn)
-
         local minusBtn = AceGUI:Create("Button")
         minusBtn:SetText("-1")
         minusBtn:SetWidth(50)
@@ -242,6 +233,15 @@ function PP:DrawRosterTab(container)
             if selEntry then PP:SetPlayerScore(sel, math.max(0, selEntry.score - 1)) end
         end)
         selRow:AddChild(minusBtn)
+
+        local plusBtn = AceGUI:Create("Button")
+        plusBtn:SetText("+1")
+        plusBtn:SetWidth(50)
+        plusBtn:SetDisabled(not hasSelection)
+        plusBtn:SetCallback("OnClick", function()
+            if selEntry then PP:SetPlayerScore(sel, selEntry.score + 1) end
+        end)
+        selRow:AddChild(plusBtn)
 
         local removeBtn = AceGUI:Create("Button")
         removeBtn:SetText("Remove")
@@ -644,7 +644,7 @@ function PP:ShowRaidDetail(raidID)
         local respStr = item.response    and ("  |cFF888888[" .. item.response .. "]|r")       or ""
         local itemRow = AceGUI:Create("Label")
         itemRow:SetFullWidth(true)
-        itemRow:SetText("  " .. (item.itemLink or "Unknown") .. "  →  "
+        itemRow:SetText("  " .. (item.itemLink or "Unknown") .. "  ->  "
             .. self:GetShortName(item.awardedTo) .. ptsStr .. respStr)
         scroll:AddChild(itemRow)
     end
@@ -779,6 +779,18 @@ function PP:DrawSettingsTab(container)
             end
         end)
         manageRow:AddChild(renameBtn)
+
+        local deleteBtn = AceGUI:Create("Button")
+        deleteBtn:SetText("Delete")
+        deleteBtn:SetWidth(80)
+        deleteBtn:SetCallback("OnClick", function()
+            local selectedKey = manageDd:GetValue()
+            if selectedKey then
+                PP._pendingDeleteRoster = selectedKey
+                StaticPopup_Show("PP_CONFIRM_DELETE_ROSTER")
+            end
+        end)
+        manageRow:AddChild(deleteBtn)
     end
 
     -- ── Loot Rules section
@@ -944,6 +956,24 @@ StaticPopupDialogs["PP_CONFIRM_RESET_ADDON"] = {
     button2 = "Cancel",
     OnAccept = function()
         PP:ResetAddon()
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+}
+
+StaticPopupDialogs["PP_CONFIRM_DELETE_ROSTER"] = {
+    text = "Delete this custom roster and all its data?\n|cFFFF4400This cannot be undone.|r",
+    button1 = "Delete",
+    button2 = "Cancel",
+    OnAccept = function()
+        if PP._pendingDeleteRoster then
+            PP:DeleteCustomRoster(PP._pendingDeleteRoster)
+            PP._pendingDeleteRoster = nil
+        end
+    end,
+    OnCancel = function()
+        PP._pendingDeleteRoster = nil
     end,
     timeout = 0,
     whileDead = true,

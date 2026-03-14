@@ -166,8 +166,8 @@ function PP:HandleSyncRequest(sender, data)
     if not self:CanModify() then return end
     local gk = (data and data.guildKey) or self:GetActiveGuildKey()
     -- Only respond if the requester's guild matches ours
-    local myGuild = self:GetPlayerGuild() or "__unguilded__"
-    if gk ~= myGuild then return end
+    local myGuild = self:GetPlayerGuild()
+    if not myGuild or gk ~= myGuild then return end
     local gd = self:GetGuildData(gk)
     local requesterVersion   = data and data.rosterVersion   or -1
     local requesterRaidItems = data and data.raidItemCount   or -1
