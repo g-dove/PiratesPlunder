@@ -3,6 +3,32 @@
 ---------------------------------------------------------------------------
 local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 
+-- Maps an item's equipLoc string to the inventory slot ID(s) that hold it.
+-- Dual-slot types (rings, trinkets) list both slots so we can pick the best.
+local EQUIP_SLOT_MAP = {
+    INVTYPE_HEAD           = { 1 },
+    INVTYPE_NECK           = { 2 },
+    INVTYPE_SHOULDER       = { 3 },
+    INVTYPE_CHEST          = { 5 },
+    INVTYPE_ROBE           = { 5 },
+    INVTYPE_WAIST          = { 6 },
+    INVTYPE_LEGS           = { 7 },
+    INVTYPE_FEET           = { 8 },
+    INVTYPE_WRIST          = { 9 },
+    INVTYPE_HAND           = { 10 },
+    INVTYPE_FINGER         = { 11, 12 },  -- both ring slots
+    INVTYPE_TRINKET        = { 13, 14 },  -- both trinket slots
+    INVTYPE_CLOAK          = { 15 },
+    INVTYPE_WEAPON         = { 16 },
+    INVTYPE_WEAPONMAINHAND = { 16 },
+    INVTYPE_2HWEAPON       = { 16 },
+    INVTYPE_SHIELD         = { 17 },
+    INVTYPE_WEAPONOFFHAND  = { 17 },
+    INVTYPE_HOLDABLE       = { 17 },
+    INVTYPE_RANGED         = { 18 },
+    INVTYPE_RANGEDRIGHT    = { 18 },
+}
+
 ---------------------------------------------------------------------------
 -- Post an item for distribution (officer / raid leader only)
 ---------------------------------------------------------------------------
@@ -17,7 +43,7 @@ function PP:PostLoot(itemLink)
     end
 
     -- Try to get itemID from cache; fall back to parsing the link directly
-    local itemID = GetItemInfoInstant(itemLink)
+    local itemID = C_Item.GetItemInfoInstant(itemLink)
     if not itemID then
         -- Extract itemID from the hyperlink: |Hitem:12345:...|h
         itemID = tonumber(itemLink:match("item:(%d+)"))
@@ -70,6 +96,54 @@ function PP:CancelLoot(key)
 end
 
 ---------------------------------------------------------------------------
+-- Build equipped-item comparison data for the local player against a new item.
+-- Returns nil if the item is not equippable or GetItemInfo data is unavailable.
+-- Only the equipped item links are returned; ilvl diffs are computed by the
+-- loot master locally to keep the message payload small.
+--
+-- Special case: if the new item is an off-hand piece and the off-hand slot is
+-- empty, check whether a two-handed weapon is equipped in the main-hand slot
+-- and return that instead – equipping an off-hand requires unequipping the 2H.
+---------------------------------------------------------------------------
+function PP:GetEquippedComparisonData(newItemLink)
+    if not newItemLink then return nil end
+    local _, _, _, _, _, _, _, _, equipLoc, _ = C_Item.GetItemInfo(newItemLink)
+    if not equipLoc or equipLoc == "" then return nil end
+
+    local slots = EQUIP_SLOT_MAP[equipLoc]
+    if not slots then return nil end
+
+    local equippedLinks = {}
+    for _, slotID in ipairs(slots) do
+        local equippedLink = GetInventoryItemLink("player", slotID)
+        if equippedLink then
+            equippedLinks[#equippedLinks + 1] = equippedLink
+        end
+    end
+
+    -- Off-hand fallback: if the off-hand slot (17) is one of the target slots
+    -- and nothing was found there, check whether a 2H weapon fills slot 16.
+    -- Equipping an off-hand forces the 2H to be unequipped, so it is the
+    -- relevant comparison item.
+    local isOffhand = (equipLoc == "INVTYPE_SHIELD"
+                    or equipLoc == "INVTYPE_WEAPONOFFHAND"
+                    or equipLoc == "INVTYPE_HOLDABLE")
+    if isOffhand and #equippedLinks == 0 then
+        local mhLink = GetInventoryItemLink("player", 16)
+        if mhLink then
+            local _, _, _, _, _, _, _, _, mhEquipLoc = C_Item.GetItemInfo(mhLink)
+            if mhEquipLoc == "INVTYPE_2HWEAPON" then
+                equippedLinks[1] = mhLink
+            end
+        end
+    end
+
+    -- Return even if equippedLinks is empty so the loot master knows
+    -- this slot exists (they can show "empty slot" in the UI).
+    return { equippedLinks = equippedLinks }
+end
+
+---------------------------------------------------------------------------
 -- Express interest in an item (any raid member)
 ---------------------------------------------------------------------------
 function PP:ExpressInterest(key, response)
@@ -80,16 +154,26 @@ function PP:ExpressInterest(key, response)
         score = roster[me].score
     end
 
+    -- For NEED/MINOR responses, collect equipped-item comparison data.
+    local comp = nil
+    if response == PP.RESPONSE.NEED or response == PP.RESPONSE.MINOR then
+        local entry = self.pendingLoot[key]
+        if entry and entry.itemLink then
+            comp = self:GetEquippedComparisonData(entry.itemLink)
+        end
+    end
+
     -- Record locally immediately (OnCommReceived filters out self-messages,
     -- so we cannot rely on the broadcast looping back to us)
-    self:ReceiveLootInterest(key, me, response, score)
+    self:ReceiveLootInterest(key, me, response, score, comp)
 
     -- Broadcast to everyone else in the group
     self:SendAddonMessage(PP.MSG.LOOT_INTEREST, {
-        key      = key,
-        player   = me,
-        response = response,
-        score    = score,
+        key           = key,
+        player        = me,
+        response      = response,
+        score         = score,
+        equippedLinks = comp and comp.equippedLinks,
     })
 
     self:SavePendingLoot()
@@ -99,12 +183,13 @@ end
 ---------------------------------------------------------------------------
 -- Receive an interest response (loot master processes this)
 ---------------------------------------------------------------------------
-function PP:ReceiveLootInterest(key, playerName, response, score)
+function PP:ReceiveLootInterest(key, playerName, response, score, comp)
     if not self.pendingLoot[key] then return end
     self.pendingLoot[key].responses[playerName] = {
-        response = response,
-        score    = score,
-        roll     = math.random(1, 100),  -- tiebreaker
+        response      = response,
+        score         = score,
+        roll          = math.random(1, 100),  -- tiebreaker
+        equippedLinks = comp and comp.equippedLinks,
     }
     self:SavePendingLoot()
     self:RefreshLootMasterWindow()
@@ -144,11 +229,12 @@ function PP:GetSortedResponses(key)
     for fullName, resp in pairs(entry.responses) do
         if resp.response ~= PP.RESPONSE.PASS then
             list[#list + 1] = {
-                fullName = fullName,
-                name     = self:GetShortName(fullName),
-                response = resp.response,
-                score    = resp.score,
-                roll     = resp.roll,
+                fullName      = fullName,
+                name          = self:GetShortName(fullName),
+                response      = resp.response,
+                score         = resp.score,
+                roll          = resp.roll,
+                equippedLinks = resp.equippedLinks,
             }
         end
     end
@@ -170,8 +256,9 @@ end
 
 ---------------------------------------------------------------------------
 -- Award an item to a player
+-- Pass free=true to award without deducting any points from their score.
 ---------------------------------------------------------------------------
-function PP:AwardItem(key, fullName)
+function PP:AwardItem(key, fullName, free)
     local entry = self.pendingLoot[key]
     if not entry then return end
 
@@ -186,7 +273,11 @@ function PP:AwardItem(key, fullName)
     local roster = self:GetRoster()
     if roster[fullName] then
         local currentScore = roster[fullName].score or 0
-        if winnerResponse == PP.RESPONSE.TRANSMOG then
+        if free then
+            -- Free award: keep score exactly as-is
+            pointsSpent = 0
+            newScore    = currentScore
+        elseif winnerResponse == PP.RESPONSE.TRANSMOG then
             pointsSpent = 1
             newScore    = math.max(0, currentScore - 1)
         elseif winnerResponse == PP.RESPONSE.MINOR then
@@ -224,7 +315,7 @@ function PP:AwardItem(key, fullName)
 
     -- Announce in raid
     local shortName = self:GetShortName(fullName)
-    SendChatMessage(
+    C_ChatInfo.SendChatMessage(
         "Pirates Plunder: " .. entry.itemLink .. " awarded to " .. shortName .. "!",
         IsInRaid() and "RAID" or "PARTY"
     )

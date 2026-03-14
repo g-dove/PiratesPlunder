@@ -128,6 +128,10 @@ function PP:DeleteRaid(raidID)
     gd.raids[raidID] = nil
     self:BumpRosterVersion(gk)  -- version bump so peers accept the delete
 
+    -- Write tombstone so full-syncs propagate the deletion to offline peers
+    if not gd.deletedRaids then gd.deletedRaids = {} end
+    gd.deletedRaids[raidID] = gd.rosterVersion
+
     self:BroadcastRaidDelete(raidID, gk, gd.rosterVersion)
 
     -- Close the detail window if it was showing this raid
