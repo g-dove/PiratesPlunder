@@ -100,6 +100,10 @@ end
 -- Returns nil if the item is not equippable or GetItemInfo data is unavailable.
 -- Only the equipped item links are returned; ilvl diffs are computed by the
 -- loot master locally to keep the message payload small.
+--
+-- Special case: if the new item is an off-hand piece and the off-hand slot is
+-- empty, check whether a two-handed weapon is equipped in the main-hand slot
+-- and return that instead – equipping an off-hand requires unequipping the 2H.
 ---------------------------------------------------------------------------
 function PP:GetEquippedComparisonData(newItemLink)
     if not newItemLink then return nil end
@@ -114,6 +118,23 @@ function PP:GetEquippedComparisonData(newItemLink)
         local equippedLink = GetInventoryItemLink("player", slotID)
         if equippedLink then
             equippedLinks[#equippedLinks + 1] = equippedLink
+        end
+    end
+
+    -- Off-hand fallback: if the off-hand slot (17) is one of the target slots
+    -- and nothing was found there, check whether a 2H weapon fills slot 16.
+    -- Equipping an off-hand forces the 2H to be unequipped, so it is the
+    -- relevant comparison item.
+    local isOffhand = (equipLoc == "INVTYPE_SHIELD"
+                    or equipLoc == "INVTYPE_WEAPONOFFHAND"
+                    or equipLoc == "INVTYPE_HOLDABLE")
+    if isOffhand and #equippedLinks == 0 then
+        local mhLink = GetInventoryItemLink("player", 16)
+        if mhLink then
+            local _, _, _, _, _, _, _, _, mhEquipLoc = C_Item.GetItemInfo(mhLink)
+            if mhEquipLoc == "INVTYPE_2HWEAPON" then
+                equippedLinks[1] = mhLink
+            end
         end
     end
 
