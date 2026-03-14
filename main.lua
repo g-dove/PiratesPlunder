@@ -18,7 +18,7 @@ PiratesPlunder.AceGUI = LibStub("AceGUI-3.0")
 -- Constants
 ---------------------------------------------------------------------------
 PiratesPlunder.COMM_PREFIX = "PPLNDR"
-PiratesPlunder.VERSION     = "0.1.0"
+PiratesPlunder.VERSION     = C_AddOns.GetAddOnMetadata(addonName, "Version") or "0.0.0"
 
 -- Comm message types
 PiratesPlunder.MSG = {
