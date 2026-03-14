@@ -92,6 +92,8 @@ function PP:HandleVersionReply(data, sender)
     if not data or not data.version then return end
     self:UpdateVersionCheckWindow(sender, tostring(data.version))
 end
+
+function PP:BroadcastRaidSettings()
     if not IsInGroup() then return end
     self:SendAddonMessage(PP.MSG.RAID_SETTINGS, {
         autoPassEpicRolls = self.db.global.autoPassEpicRolls,
