@@ -103,6 +103,45 @@ function PP:RecordItemAward(itemLink, itemID, awardedTo, pointsSpent, response)
 end
 
 ---------------------------------------------------------------------------
+-- Delete a raid record permanently (officer only)
+---------------------------------------------------------------------------
+function PP:DeleteRaid(raidID)
+    if not self:IsOfficerOrHigher() then
+        self:Print("Only guild officers can delete raids.")
+        return
+    end
+
+    local gk = self:GetActiveGuildKey()
+    local gd = self:GetGuildData(gk)
+    if not gd or not gd.raids[raidID] then
+        self:Print("Raid not found.")
+        return
+    end
+
+    -- If this is the active raid, clear it first
+    if gd.activeRaidID == raidID then
+        gd.activeRaidID = nil
+        wipe(self.pendingLoot)
+        self:CloseLootPopups()
+    end
+
+    gd.raids[raidID] = nil
+    self:BumpRosterVersion(gk)  -- version bump so peers accept the delete
+
+    self:BroadcastRaidDelete(raidID, gk, gd.rosterVersion)
+
+    -- Close the detail window if it was showing this raid
+    if self._raidDetailWindow then
+        self._raidDetailWindow:Release()
+        self._raidDetailWindow = nil
+    end
+
+    self:RefreshMainWindow()
+    self:RefreshLootMasterWindow()
+    self:Print("Raid deleted.")
+end
+
+---------------------------------------------------------------------------
 -- Check if the original raid leader is still present
 ---------------------------------------------------------------------------
 function PP:CheckRaidLeaderPresent()

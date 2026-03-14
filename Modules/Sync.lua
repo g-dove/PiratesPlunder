@@ -70,6 +70,9 @@ function PP:OnCommReceived(prefix, message, distribution, sender)
     elseif msgType == PP.MSG.RAID_SETTINGS then
         self:HandleRaidSettings(data, sender)
 
+    elseif msgType == PP.MSG.RAID_DELETE then
+        self:HandleRaidDelete(data, sender)
+
     elseif msgType == PP.MSG.VERSION_REQUEST then
         self:HandleVersionRequest(sender)
 
@@ -145,6 +148,15 @@ function PP:BroadcastRaidClose(raidID)
     self:SendAddonMessage(PP.MSG.RAID_CLOSE, {
         raidID   = raidID,
         guildKey = self:GetActiveGuildKey(),
+    })
+end
+
+function PP:BroadcastRaidDelete(raidID, guildKey, newVersion)
+    if not IsInGroup() then return end
+    self:SendAddonMessage(PP.MSG.RAID_DELETE, {
+        raidID      = raidID,
+        guildKey    = guildKey,
+        version     = newVersion,
     })
 end
 
@@ -264,6 +276,36 @@ function PP:HandleRaidCreate(data, sender)
         self._activeGuildKey = gk
     end
     self:Print("Raid started: " .. (data.raid.name or data.raidID))
+    self:RefreshMainWindow()
+end
+
+-- Raid deleted by an officer
+function PP:HandleRaidDelete(data, sender)
+    if not data or not data.raidID or not data.guildKey then return end
+    local gd = self:GetGuildData(data.guildKey)
+    if not gd then return end
+
+    -- Only apply if the incoming version is newer than ours (same guard as roster updates)
+    if data.version and data.version <= gd.rosterVersion then return end
+
+    gd.raids[data.raidID] = nil
+    gd.rosterVersion = data.version
+
+    if gd.activeRaidID == data.raidID then
+        gd.activeRaidID = nil
+        wipe(self.pendingLoot)
+        self:CloseLootPopups()
+        self:RefreshLootMasterWindow()
+        self:RefreshLootResponseFrame()
+    end
+
+    -- Close the detail window if it was showing the deleted raid
+    if self._raidDetailWindow then
+        self._raidDetailWindow:Release()
+        self._raidDetailWindow = nil
+    end
+
+    self:Print("A raid record was deleted by an officer.")
     self:RefreshMainWindow()
 end
 
