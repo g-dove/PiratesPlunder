@@ -615,9 +615,13 @@ function PiratesPlunder:CheckActiveRaid()
     end
 end
 
--- Generate a unique key from an item link + timestamp
+-- Generate a unique key from an item link + timestamp + monotonic index.
+-- The index ensures two identical items posted in the same frame (same
+-- GetTime() value) always produce distinct keys.
+local _lootKeyIndex = 0
 function PiratesPlunder:LootKey(itemLink)
-    return tostring(itemLink) .. ":" .. tostring(GetTime())
+    _lootKeyIndex = _lootKeyIndex + 1
+    return tostring(itemLink) .. ":" .. tostring(GetTime()) .. ":" .. _lootKeyIndex
 end
 
 ---------------------------------------------------------------------------

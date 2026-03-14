@@ -28,7 +28,7 @@ function PP:CreateLootMasterWindow()
     local f = AceGUI:Create("Frame")
     f:SetTitle("Pirates Plunder – Loot Master")
     f:SetLayout("Fill")
-    f:SetWidth(650)
+    f:SetWidth(700)
     f:SetHeight(500)
     f:SetCallback("OnClose", function(widget)
         AceGUI:Release(widget)
@@ -206,6 +206,11 @@ function PP:DrawLootMasterContent(container)
             rh5:SetWidth(90)
             hdrRow:AddChild(rh5)
 
+            local rh6 = AceGUI:Create("Label")
+            rh6:SetText("|cFFFFD100Equipped|r")
+            rh6:SetWidth(130)
+            hdrRow:AddChild(rh6)
+
             for rIdx, resp in ipairs(responses) do
                 local rRow = AceGUI:Create("SimpleGroup")
                 rRow:SetFullWidth(true)
@@ -240,6 +245,64 @@ function PP:DrawLootMasterContent(container)
                 rl5:SetWidth(90)
                 rRow:AddChild(rl5)
 
+                -- Equipped item comparison (NEED / MINOR only)
+                -- Icons for each equipped item with individual tooltips.
+                -- ilvl diff is computed here from the item being distributed
+                -- vs each equipped link, so it never travels in messages.
+                local compGroup = AceGUI:Create("SimpleGroup")
+                compGroup:SetLayout("Flow")
+                compGroup:SetWidth(130)
+                compGroup.frame:EnableMouse(false)
+                rRow:AddChild(compGroup)
+
+                local hasComp = resp.equippedLinks ~= nil
+                if hasComp then
+                    -- Compute best ilvl diff locally from the distributed item
+                    local _, _, _, newIlvl = C_Item.GetItemInfo(item.itemLink)
+                    local bestDiff = nil
+                    if newIlvl and #resp.equippedLinks > 0 then
+                        for _, eLink in ipairs(resp.equippedLinks) do
+                            local _, _, _, eIlvl = C_Item.GetItemInfo(eLink)
+                            if eIlvl then
+                                local d = newIlvl - eIlvl
+                                if bestDiff == nil or d > bestDiff then bestDiff = d end
+                            end
+                        end
+                    end
+
+                    -- One icon per equipped item, each with its own tooltip
+                    for _, eLink in ipairs(resp.equippedLinks) do
+                        local _, _, _, _, _, _, _, _, _, tex = C_Item.GetItemInfo(eLink)
+                        local iconLbl = AceGUI:Create("Label")
+                        iconLbl:SetWidth(20)
+                        iconLbl:SetText(tex and ("|T" .. tex .. ":16:16|t") or "")
+                        local capturedLink = eLink
+                        iconLbl.frame:EnableMouse(true)
+                        iconLbl.frame:SetScript("OnEnter", function(f)
+                            GameTooltip:SetOwner(f, "ANCHOR_CURSOR")
+                            GameTooltip:SetHyperlink(capturedLink)
+                            GameTooltip:Show()
+                        end)
+                        iconLbl.frame:SetScript("OnLeave", function()
+                            GameTooltip:Hide()
+                        end)
+                        compGroup:AddChild(iconLbl)
+                    end
+
+                    local diffLbl = AceGUI:Create("Label")
+                    if bestDiff ~= nil then
+                        local color = bestDiff > 0 and "|cFF00FF00"
+                                   or bestDiff < 0 and "|cFFFF4444"
+                                   or "|cFFAAAAAA"
+                        local sign = bestDiff > 0 and "+" or ""
+                        diffLbl:SetText(color .. sign .. bestDiff .. " ilvl|r")
+                    else
+                        diffLbl:SetText("|cFFAAAAAA(empty)|r")
+                    end
+                    diffLbl:SetWidth(70)
+                    compGroup:AddChild(diffLbl)
+                end
+
                 local awardBtn = AceGUI:Create("Button")
                 awardBtn:SetText("Award")
                 awardBtn:SetWidth(70)
@@ -249,6 +312,14 @@ function PP:DrawLootMasterContent(container)
                     PP:AwardItem(capturedKey, capturedName)
                 end)
                 rRow:AddChild(awardBtn)
+
+                local freeBtn = AceGUI:Create("Button")
+                freeBtn:SetText("|cFF00FF00Free|r")
+                freeBtn:SetWidth(60)
+                freeBtn:SetCallback("OnClick", function()
+                    PP:AwardItem(capturedKey, capturedName, true)
+                end)
+                rRow:AddChild(freeBtn)
             end
         else
             local noResp = AceGUI:Create("Label")

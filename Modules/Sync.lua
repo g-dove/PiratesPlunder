@@ -365,7 +365,8 @@ end
 -- Loot interest received
 function PP:HandleLootInterest(data, sender)
     if not data or not data.key then return end
-    self:ReceiveLootInterest(data.key, data.player or sender, data.response, data.score)
+    local comp = data.equippedLinks and { equippedLinks = data.equippedLinks } or nil
+    self:ReceiveLootInterest(data.key, data.player or sender, data.response, data.score, comp)
 end
 
 -- Loot awarded
