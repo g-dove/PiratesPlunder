@@ -93,11 +93,22 @@ function PiratesPlunder:OnInitialize()
         self.db.global.migrated_v2  = true
     end
 
+    -- One-time migration: rename __unguilded__ (the old "Default" roster) to __custom__:Default
+    if self.db.global.guilds and self.db.global.guilds["__unguilded__"] then
+        local ud     = self.db.global.guilds["__unguilded__"]
+        local newKey = "__custom__:Default"
+        if ud.roster and next(ud.roster) ~= nil then
+            -- Preserve existing data only if the target key doesn't already exist
+            if not self.db.global.guilds[newKey] then
+                self.db.global.guilds[newKey] = ud
+            end
+        end
+        self.db.global.guilds["__unguilded__"] = nil
+    end
+
     -- Slash commands
     self:RegisterChatCommand("pp", "SlashCommand")
     self:RegisterChatCommand("piratesplunder", "SlashCommand")
-    self:RegisterChatCommand("pploot", "SlashCommandLoot")
-    self:RegisterChatCommand("ppl", "SlashCommandLoot")
 
     -- Comm
     self:RegisterComm(self.COMM_PREFIX)
@@ -120,6 +131,18 @@ function PiratesPlunder:OnInitialize()
     self:Print("Pirates Plunder v" .. self.VERSION .. " loaded. Type /pp to open.")
 end
 
+-- Returns the key of the first custom roster that has an active raid, or nil.
+function PiratesPlunder:FindCustomRosterWithActiveRaid()
+    for key, gd in pairs(self.db.global.guilds) do
+        if self:IsCustomRoster(key) and gd.activeRaidID and gd.raids and gd.raids[gd.activeRaidID] then
+            if gd.raids[gd.activeRaidID].active == true then
+                return key
+            end
+        end
+    end
+    return nil
+end
+
 function PiratesPlunder:OnEnable()
     self:RegisterEvent("GROUP_ROSTER_UPDATE",  "OnGroupRosterUpdate")
     self:RegisterEvent("ENCOUNTER_END",        "OnEncounterEnd")
@@ -134,8 +157,16 @@ function PiratesPlunder:OnEnable()
         C_GuildInfo.GuildRoster()  -- async; result arrives via GUILD_ROSTER_UPDATE
     end
 
-    -- Set initial active guild key
-    self._activeGuildKey = self:GetPlayerGuild() or "__unguilded__"
+    -- Set initial active guild key.
+    -- Priority: own guild roster > custom roster with an active raid > first available.
+    local _initGuild = self:GetPlayerGuild()
+    if _initGuild and self.db.global.guilds[_initGuild] then
+        self._activeGuildKey = _initGuild
+    else
+        self._activeGuildKey = self:FindCustomRosterWithActiveRaid()
+            or next(self.db.global.guilds)
+            or nil
+    end
 
     self:CheckActiveRaid()
 
@@ -155,29 +186,30 @@ function PiratesPlunder:SlashCommand(input)
         self:ToggleMainWindow()
     elseif input == "help" then
         self:Print("/pp – Toggle main window")
-        self:Print("/pploot – Toggle loot-master window")
-        self:Print("/pp sandbox – Toggle sandbox mode")
-        self:Print("/pp sandbox mod – Toggle canModify override in sandbox")
+        self:Print("/pp loot (or /pp l) – Toggle loot-master window")
+        self:Print("/pp sandbox (or /pp s) – Toggle sandbox mode")
+        self:Print("/pp sandbox mod (or /pp s m) – Toggle canModify override in sandbox")
         self:Print("/pp status – Show officer detection info")
         self:Print("/pp bagdebug – Diagnose alt+right-click bag hook")
-    elseif input == "sandbox" then
+    elseif input == "loot" or input == "l" then
+        self:SlashCommandLoot()
+    elseif input == "sandbox" or input == "s" then
         if self:IsSandbox() then
             self:DisableSandbox()
         else
             self:EnableSandbox()
         end
-    elseif input == "sandbox mod" then
+    elseif input == "sandbox mod" or input == "s m" then
         if not self:IsSandbox() then
-            self:Print("Sandbox is not active. Run /pp sandbox first.")
-        else
-            self._sandboxModOverride = not self._sandboxModOverride
-            if self._sandboxModOverride then
-                self:Print("|cFFFFD100[Sandbox] CanModify override: ON — acting as officer.|r")
-            else
-                self:Print("|cFF888888[Sandbox] CanModify override: OFF — acting as non-officer.|r")
-            end
-            self:RefreshMainWindow()
+            self:EnableSandbox()
         end
+        self._sandboxModOverride = not self._sandboxModOverride
+        if self._sandboxModOverride then
+            self:Print("|cFFFFD100[Sandbox] CanModify override: ON — acting as officer.|r")
+        else
+            self:Print("|cFF888888[Sandbox] CanModify override: OFF — acting as non-officer.|r")
+        end
+        self:RefreshMainWindow()
     elseif input:match("^setrank%s+(%d+)$") then
         local n = tonumber(input:match("^setrank%s+(%d+)$"))
         self.db.global.officerRankThreshold = n
@@ -216,7 +248,7 @@ function PiratesPlunder:SlashCommand(input)
 end
 
 function PiratesPlunder:SlashCommandLoot()
-    if self:HasActiveRaid() and (self:IsRaidLeaderOrAssist() or self:CanModify()) then
+    if self:CanPostLoot() then
         self:ToggleLootMasterWindow()
     else
         self:Print("You must be raid leader/assistant with an active raid to use /pploot.")
@@ -270,7 +302,7 @@ end
 -- Priority: manually selected (_activeGuildKey) > player's own guild > fallback
 function PiratesPlunder:GetActiveGuildKey()
     if self._sandbox then return "__sandbox__" end
-    return self._activeGuildKey or self:GetPlayerGuild() or "__unguilded__"
+    return self._activeGuildKey or self:GetPlayerGuild() or nil
 end
 
 -- Ensures a per-guild data block exists and returns it.
@@ -289,6 +321,65 @@ function PiratesPlunder:GetGuildData(guildKey)
         }
     end
     return self.db.global.guilds[guildKey]
+end
+
+---------------------------------------------------------------------------
+-- Roster display-name helpers
+---------------------------------------------------------------------------
+
+-- Human-readable label for a roster key shown in the UI.
+function PiratesPlunder:GetRosterDisplayName(key)
+    if key == "__sandbox__" then return "Sandbox" end
+    local custom = key and key:match("^__custom__:(.+)$")
+    if custom then return custom end
+    return key or "Unknown"
+end
+
+-- True for custom (non-guild) rosters: only __custom__:* keys.
+function PiratesPlunder:IsCustomRoster(key)
+    return key ~= nil and key:match("^__custom__:") ~= nil
+end
+
+-- Creates a new custom roster with the given display name and activates it.
+function PiratesPlunder:CreateCustomRoster(name)
+    local trimmed = name and name:trim() or ""
+    if trimmed == "" then return end
+    local key = "__custom__:" .. trimmed
+    self:GetGuildData(key)     -- creates db entry if missing
+    self._activeGuildKey = key
+    self:RefreshMainWindow()
+end
+
+-- Renames a custom roster: copies data to new key, removes old key.
+function PiratesPlunder:RenameCustomRoster(oldKey, newName)
+    local trimmed = newName and newName:trim() or ""
+    if trimmed == "" then return end
+    local newKey = "__custom__:" .. trimmed
+    if newKey == oldKey then return end
+    local data = self.db.global.guilds[oldKey]
+    if not data then return end
+    self.db.global.guilds[newKey] = data
+    self.db.global.guilds[oldKey] = nil
+    if self._activeGuildKey == oldKey then
+        self._activeGuildKey = newKey
+    end
+    self:RefreshMainWindow()
+end
+
+-- Deletes a custom roster and all its saved data.
+function PiratesPlunder:DeleteCustomRoster(key)
+    if not self:IsCustomRoster(key) then return end
+    self.db.global.guilds[key] = nil
+    -- If the deleted roster was active, switch to guild roster or first available
+    if self._activeGuildKey == key then
+        local guild = self:GetPlayerGuild()
+        if guild and self.db.global.guilds[guild] then
+            self._activeGuildKey = guild
+        else
+            self._activeGuildKey = next(self.db.global.guilds) or nil
+        end
+    end
+    self:RefreshMainWindow()
 end
 
 ---------------------------------------------------------------------------
@@ -356,16 +447,18 @@ function PiratesPlunder:DisableSandbox()
 end
 
 function PiratesPlunder:GetRoster(guildKey)
-    return self:GetGuildData(guildKey or self:GetActiveGuildKey()).roster
+    local gd = self:GetGuildData(guildKey or self:GetActiveGuildKey())
+    return gd and gd.roster or {}
 end
 
 function PiratesPlunder:GetGuildRaids(guildKey)
-    return self:GetGuildData(guildKey or self:GetActiveGuildKey()).raids
+    local gd = self:GetGuildData(guildKey or self:GetActiveGuildKey())
+    return gd and gd.raids or {}
 end
 
 function PiratesPlunder:BumpRosterVersion(guildKey)
     local gd = self:GetGuildData(guildKey or self:GetActiveGuildKey())
-    gd.rosterVersion = gd.rosterVersion + 1
+    if gd then gd.rosterVersion = gd.rosterVersion + 1 end
 end
 -- 1st: C_GuildInfo.IsGuildOfficer() – canonical Blizzard API.
 -- 2nd: CanUseGuildOfficerChat() – older API fallback.
@@ -433,17 +526,46 @@ function PiratesPlunder:IsRaidLeaderOrAssist()
     return false
 end
 
+function PiratesPlunder:IsRaidLeader()
+    if self._sandbox then return true end
+    if not IsInRaid() then return false end
+    local me = self:GetPlayerFullName()
+    for i = 1, GetNumGroupMembers() do
+        local name, rank = GetRaidRosterInfo(i)
+        if name and self:GetFullName(name) == me then
+            return rank == 2   -- 2 = leader only
+        end
+    end
+    return false
+end
+
 function PiratesPlunder:CanModify()
     if self._sandbox then return self._sandboxModOverride ~= false end
-    -- Must have officer or raid-leader/assistant role
-    if not (self:IsOfficerOrHigher() or self:IsRaidLeaderOrAssist()) then
+    local activeKey = self:GetActiveGuildKey()
+    if not activeKey then return false end
+    -- Custom rosters: only the raid leader may modify
+    if self:IsCustomRoster(activeKey) then
+        return self:IsRaidLeader()
+    end
+    -- Guild rosters: officer only (raid leader/assist can post loot but not modify roster/scores)
+    if not self:IsOfficerOrHigher() then
         return false
     end
-    -- Player's guild must match the active roster guild to prevent officers
-    -- from other guilds modifying this roster and syncing it to everyone.
-    local myGuild   = self:GetPlayerGuild() or "__unguilded__"
+    local myGuild = self:GetPlayerGuild()
+    return myGuild ~= nil and myGuild == activeKey
+end
+
+-- Whether the current player may post loot for rolling.
+-- Custom rosters: raid leader only.
+-- Guild rosters: officer or raid-leader/assist.
+function PiratesPlunder:CanPostLoot()
+    if self._sandbox then return self._sandboxModOverride ~= false end
+    if not self:HasActiveRaid() then return false end
     local activeKey = self:GetActiveGuildKey()
-    return myGuild == activeKey
+    if activeKey and self:IsCustomRoster(activeKey) then
+        return self:IsRaidLeader()
+    end
+    return self:CanModify() or self:IsRaidLeaderOrAssist()
 end
 
 function PiratesPlunder:HasActiveRaid()
@@ -570,8 +692,8 @@ function PiratesPlunder:AltRightClickPost(itemLink)
         self:Print("No active raid – cannot post loot.")
         return
     end
-    if not self:CanModify() and not self:IsRaidLeaderOrAssist() then
-        self:Print("Only officers or raid leader/assistants can post loot.")
+    if not self:CanPostLoot() then
+        self:Print("Only the raid leader can post loot for this roster.")
         return
     end
     -- Queue the item and open/refresh the loot master window
@@ -622,8 +744,8 @@ function PiratesPlunder:OnGroupLeft()
             self:Print("Raid ended – you left the group.")
         end
     end
-    -- Reset active guild to own guild when leaving the group
-    self._activeGuildKey = self:GetPlayerGuild() or "__unguilded__"
+    -- Reset active guild to own guild when leaving the group (nil if not guilded)
+    self._activeGuildKey = self:GetPlayerGuild() or nil
 end
 
 function PiratesPlunder:OnGuildRosterUpdate()
@@ -660,7 +782,7 @@ function PiratesPlunder:ResetAddon()
     -- Clear runtime state
     wipe(self.pendingLoot)
     wipe(self.pendingTrades)
-    self._activeGuildKey = self:GetPlayerGuild() or "__unguilded__"
+    self._activeGuildKey = self:GetPlayerGuild() or nil
     self._isOfficer = nil
     -- Close any open windows
     if self.mainWindow then
@@ -676,12 +798,14 @@ function PiratesPlunder:ResetAddon()
 end
 
 function PiratesPlunder:OnPlayerEnteringWorld(_, isInitialLogin, isReloadingUi)
-    -- Ensure active guild key is set after world load
-    local myGuild = self:GetPlayerGuild()
-    if myGuild then
-        self._activeGuildKey = self._activeGuildKey or myGuild
-    else
-        self._activeGuildKey = self._activeGuildKey or "__unguilded__"
+    -- Ensure active guild key is set after world load.
+    -- Priority: own guild > custom roster with active raid > first available.
+    if not self._activeGuildKey then
+        local myGuild = self:GetPlayerGuild()
+        self._activeGuildKey = (myGuild and self.db.global.guilds[myGuild] and myGuild)
+            or self:FindCustomRosterWithActiveRaid()
+            or next(self.db.global.guilds)
+            or nil
     end
     -- On login/reload: request guild roster first; sync will fire from
     -- OnGuildRosterUpdate once the guild data is actually populated.

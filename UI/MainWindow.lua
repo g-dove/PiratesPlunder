@@ -79,6 +79,17 @@ function PP:DrawRosterTab(container)
     PP:RefreshOfficerStatus()
     local canModify = self:CanModify()
 
+    -- Strips any lingering mouse scripts from a recycled AceGUI SimpleGroup frame.
+    local function scrubFrame(sg)
+        sg.frame:EnableMouse(false)
+        sg.frame:SetScript("OnMouseDown", nil)
+        sg.frame:SetScript("OnEnter",    nil)
+        sg.frame:SetScript("OnLeave",    nil)
+        if sg.frame._ppHlTex then
+            sg.frame._ppHlTex:SetColorTexture(0, 0, 0, 0)
+        end
+    end
+
     -- Single ScrollFrame as the sole Fill child of the tab container
     local scroll = AceGUI:Create("ScrollFrame")
     scroll:SetFullWidth(true)
@@ -86,34 +97,46 @@ function PP:DrawRosterTab(container)
     scroll:SetLayout("List")
     container:AddChild(scroll)
 
-    -- Guild selector dropdown (shown when multiple guild rosters are saved)
-    local guildKeys = {}
-    for gk in pairs(self.db.global.guilds) do
-        guildKeys[#guildKeys + 1] = gk
-    end
-    if #guildKeys > 1 then
+    -- ── Roster selector ──────────────────────────────────────────────────
+    if not PP:IsSandbox() then
         local ddGroup = AceGUI:Create("SimpleGroup")
         ddGroup:SetFullWidth(true)
         ddGroup:SetLayout("Flow")
+        scrubFrame(ddGroup)
         scroll:AddChild(ddGroup)
+
         local dd = AceGUI:Create("Dropdown")
-        dd:SetLabel("Guild Roster")
-        dd:SetWidth(240)
-        local items = {}
-        for _, gk in ipairs(guildKeys) do items[gk] = gk end
-        dd:SetList(items)
+        dd:SetLabel("Active Roster")
+        dd:SetWidth(220)
+        local ddItems = {}
+        for gk in pairs(self.db.global.guilds) do
+            ddItems[gk] = PP:GetRosterDisplayName(gk)
+        end
+        dd:SetList(ddItems)
         dd:SetValue(PP:GetActiveGuildKey())
         dd:SetCallback("OnValueChanged", function(_, _, val)
             PP._activeGuildKey = val
+            PP._selectedRosterPlayer = nil
             PP:DrawRosterTab(container)
         end)
         ddGroup:AddChild(dd)
+
+        if canModify then
+            local newBtn = AceGUI:Create("Button")
+            newBtn:SetText("New Roster")
+            newBtn:SetWidth(110)
+            newBtn:SetCallback("OnClick", function()
+                StaticPopup_Show("PP_CREATE_ROSTER")
+            end)
+            ddGroup:AddChild(newBtn)
+        end
     end
 
-    -- Top bar: add player + actions
+    -- Top bar: add player + roster management
     local topGroup = AceGUI:Create("SimpleGroup")
     topGroup:SetFullWidth(true)
     topGroup:SetLayout("Flow")
+    scrubFrame(topGroup)
     scroll:AddChild(topGroup)
 
     if canModify then
@@ -145,35 +168,122 @@ function PP:DrawRosterTab(container)
         topGroup:AddChild(clearBtn)
     end
 
-    -- ── Bulk group-score section ───────────────────────────────────────────
+    -- ── Actions section ───────────────────────────────────────────────────
     if canModify then
-        local bulkHead = AceGUI:Create("Heading")
-        bulkHead:SetFullWidth(true)
-        bulkHead:SetText("Award Group Points")
-        scroll:AddChild(bulkHead)
+        local actionsHead = AceGUI:Create("Heading")
+        actionsHead:SetFullWidth(true)
+        actionsHead:SetText("Actions")
+        scroll:AddChild(actionsHead)
 
-        local bulkRow = AceGUI:Create("SimpleGroup")
-        bulkRow:SetFullWidth(true)
-        bulkRow:SetLayout("Flow")
-        scroll:AddChild(bulkRow)
+        -- ── Selection subsection ──────────────────────────────────────────
+        local selSubHead = AceGUI:Create("Label")
+        selSubHead:SetFullWidth(true)
+        selSubHead:SetText("|cFFFFD100Selection|r")
+        scroll:AddChild(selSubHead)
 
-        local plusOneBtn = AceGUI:Create("Button")
-        plusOneBtn:SetText("+1 to Group")
-        plusOneBtn:SetWidth(120)
-        plusOneBtn:SetCallback("OnClick", function()
-            if not IsInGroup() then
-                PP:Print("You must be in a group.")
-                return
+        local sel      = PP._selectedRosterPlayer
+        local selEntry = nil
+        if sel then
+            for _, e in ipairs(self:GetSortedRoster()) do
+                if e.fullName == sel then selEntry = e; break end
             end
-            PP:AddScoreToRaidMembers(1)
+        end
+        local hasSelection = selEntry ~= nil
+        
+        local selPadTop = AceGUI:Create("Label")
+        selPadTop:SetFullWidth(true)
+        selPadTop:SetText(" ")
+        selPadTop:SetHeight(20)
+        scroll:AddChild(selPadTop)
+
+        local selHint = AceGUI:Create("Label")
+        selHint:SetFullWidth(true)
+        selHint:SetText(hasSelection
+            and ("|cFFAAAAAA  Editing: |r|cFFFFD100" .. selEntry.name .. "|r")
+            or  "|cFFAAAAAA  Click a row below to select a player.|r")
+        scroll:AddChild(selHint)
+
+        local selRow = AceGUI:Create("SimpleGroup")
+        selRow:SetFullWidth(true)
+        selRow:SetLayout("Flow")
+        scrubFrame(selRow)
+        scroll:AddChild(selRow)
+
+        local scoreBox = AceGUI:Create("EditBox")
+        scoreBox:SetLabel("")
+        scoreBox:SetWidth(60)
+        scoreBox:SetText(hasSelection and tostring(selEntry.score) or "")
+        scoreBox:SetDisabled(not hasSelection)
+        scoreBox:SetCallback("OnEnterPressed", function(widget, _, text)
+            if not selEntry then return end
+            local val = tonumber(text)
+            if val then
+                PP:SetPlayerScore(sel, val)
+            else
+                widget:SetText(tostring(selEntry.score))
+            end
         end)
-        bulkRow:AddChild(plusOneBtn)
+        selRow:AddChild(scoreBox)
+
+        local minusBtn = AceGUI:Create("Button")
+        minusBtn:SetText("-1")
+        minusBtn:SetWidth(50)
+        minusBtn:SetDisabled(not hasSelection)
+        minusBtn:SetCallback("OnClick", function()
+            if selEntry then PP:SetPlayerScore(sel, math.max(0, selEntry.score - 1)) end
+        end)
+        selRow:AddChild(minusBtn)
+
+        local plusBtn = AceGUI:Create("Button")
+        plusBtn:SetText("+1")
+        plusBtn:SetWidth(50)
+        plusBtn:SetDisabled(not hasSelection)
+        plusBtn:SetCallback("OnClick", function()
+            if selEntry then PP:SetPlayerScore(sel, selEntry.score + 1) end
+        end)
+        selRow:AddChild(plusBtn)
+
+        local removeBtn = AceGUI:Create("Button")
+        removeBtn:SetText("Remove")
+        removeBtn:SetWidth(80)
+        removeBtn:SetDisabled(not hasSelection)
+        removeBtn:SetCallback("OnClick", function()
+            if selEntry then
+                PP._pendingRemovePlayer = sel
+                StaticPopup_Show("PP_CONFIRM_REMOVE_PLAYER")
+            end
+        end)
+        selRow:AddChild(removeBtn)
+
+        local selPad = AceGUI:Create("Label")
+        selPad:SetFullWidth(true)
+        selPad:SetText(" ")
+        selPad:SetHeight(20)
+        scroll:AddChild(selPad)
+
+        -- ── Group Actions subsection ───────────────────────────────────────
+        local groupSubHead = AceGUI:Create("Label")
+        groupSubHead:SetFullWidth(true)
+        groupSubHead:SetText("|cFFFFD100Group Actions|r")
+        scroll:AddChild(groupSubHead)
+
+        local groupRow = AceGUI:Create("SimpleGroup")
+        groupRow:SetFullWidth(true)
+        groupRow:SetLayout("Flow")
+        scrubFrame(groupRow)
+        scroll:AddChild(groupRow)
 
         local bulkAmountBox = AceGUI:Create("EditBox")
-        bulkAmountBox:SetLabel("Custom Amount")
-        bulkAmountBox:SetWidth(120)
-        bulkAmountBox:SetText("1")
-        bulkRow:AddChild(bulkAmountBox)
+        bulkAmountBox:SetLabel("Amount")
+        bulkAmountBox:SetWidth(100)
+        bulkAmountBox:SetText(PP._groupAmountValue or "1")
+        bulkAmountBox:SetCallback("OnTextChanged", function(_, _, text)
+            PP._groupAmountValue = text
+        end)
+        bulkAmountBox:SetCallback("OnEnterPressed", function(_, _, text)
+            PP._groupAmountValue = text
+        end)
+        groupRow:AddChild(bulkAmountBox)
 
         local applyBtn = AceGUI:Create("Button")
         applyBtn:SetText("Apply to Group")
@@ -190,15 +300,27 @@ function PP:DrawRosterTab(container)
             end
             PP:AddScoreToRaidMembers(amt)
         end)
-        bulkRow:AddChild(applyBtn)
+        groupRow:AddChild(applyBtn)
+
+        local plusOneBtn = AceGUI:Create("Button")
+        plusOneBtn:SetText("+1 to Group")
+        plusOneBtn:SetWidth(120)
+        plusOneBtn:SetCallback("OnClick", function()
+            if not IsInGroup() then
+                PP:Print("You must be in a group.")
+                return
+            end
+            PP:AddScoreToRaidMembers(1)
+        end)
+        groupRow:AddChild(plusOneBtn)
 
         local bulkDesc = AceGUI:Create("Label")
         bulkDesc:SetFullWidth(true)
-        bulkDesc:SetText("|cFFAAAAAA  Adjusts score for all roster members who are currently in your group.\n  Negative values reduce scores (floor 0 not enforced for custom amounts).\n|r")
+        bulkDesc:SetText("|cFFAAAAAA  Group actions adjust score for all roster members currently in your group.\n|r")
         scroll:AddChild(bulkDesc)
     end
 
-    -- Heading
+    -- Player Roster heading
     local heading = AceGUI:Create("Heading")
     heading:SetFullWidth(true)
     heading:SetText("Player Roster  (sorted by score)")
@@ -208,6 +330,7 @@ function PP:DrawRosterTab(container)
     local headerRow = AceGUI:Create("SimpleGroup")
     headerRow:SetFullWidth(true)
     headerRow:SetLayout("Flow")
+    scrubFrame(headerRow)
     scroll:AddChild(headerRow)
 
     local h1 = AceGUI:Create("Label")
@@ -230,21 +353,61 @@ function PP:DrawRosterTab(container)
     h4:SetWidth(60)
     headerRow:AddChild(h4)
 
-    if canModify then
-        local h5 = AceGUI:Create("Label")
-        h5:SetText("|cFFFFD100Actions|r")
-        h5:SetWidth(210)
-        headerRow:AddChild(h5)
-    end
-
     -- Player rows
     local sorted  = self:GetSortedRoster()
     local raidSet = self:GetRaidMemberSet()
 
+    local padTop = AceGUI:Create("Label")
+    padTop:SetFullWidth(true)
+    padTop:SetText(" ")
+    padTop:SetHeight(4)
+    scroll:AddChild(padTop)
+
     for idx, entry in ipairs(sorted) do
+        local isSelected = canModify and (PP._selectedRosterPlayer == entry.fullName)
+
         local row = AceGUI:Create("SimpleGroup")
         row:SetFullWidth(true)
         row:SetLayout("Flow")
+
+        -- Reuse or create a single highlight texture per frame (frames are recycled by AceGUI,
+        -- so CreateTexture must not be called unconditionally or textures accumulate).
+        -- The texture bleeds 4px above and below to visually cover the padding spacers.
+        if not row.frame._ppHlTex then
+            row.frame._ppHlTex = row.frame:CreateTexture(nil, "BACKGROUND")
+            row.frame._ppHlTex:SetPoint("TOPLEFT",     row.frame, "TOPLEFT",     0,  4)
+            row.frame._ppHlTex:SetPoint("BOTTOMRIGHT", row.frame, "BOTTOMRIGHT", 0, -4)
+        end
+        local hlTex = row.frame._ppHlTex
+
+        if canModify then
+            row.frame:EnableMouse(true)
+            row.frame:SetScript("OnMouseDown", function()
+                if PP._selectedRosterPlayer == entry.fullName then
+                    PP._selectedRosterPlayer = nil
+                else
+                    PP._selectedRosterPlayer = entry.fullName
+                end
+                PP:DrawRosterTab(container)
+            end)
+
+            if isSelected then
+                hlTex:SetColorTexture(1, 0.85, 0, 0.15)
+                row.frame:SetScript("OnEnter", nil)
+                row.frame:SetScript("OnLeave", nil)
+            else
+                hlTex:SetColorTexture(0, 0, 0, 0)
+                row.frame:SetScript("OnEnter", function() hlTex:SetColorTexture(1, 1, 1, 0.07) end)
+                row.frame:SetScript("OnLeave", function() hlTex:SetColorTexture(0, 0, 0, 0) end)
+            end
+        else
+            -- Read-only: no interaction, clear any highlight left on a recycled frame
+            hlTex:SetColorTexture(0, 0, 0, 0)
+            row.frame:EnableMouse(false)
+            row.frame:SetScript("OnMouseDown", nil)
+            row.frame:SetScript("OnEnter", nil)
+            row.frame:SetScript("OnLeave", nil)
+        end
 
         local nameColor = raidSet[entry.fullName] and "|cFF00FF00" or "|cFFAAAAAA"
 
@@ -268,50 +431,13 @@ function PP:DrawRosterTab(container)
         scoreLabel:SetWidth(60)
         row:AddChild(scoreLabel)
 
-        if canModify then
-            local scoreBox = AceGUI:Create("EditBox")
-            scoreBox:SetLabel("")
-            scoreBox:SetWidth(50)
-            scoreBox:SetText(tostring(entry.score))
-            local capturedFullName = entry.fullName
-            scoreBox:SetCallback("OnEnterPressed", function(widget, _, text)
-                local val = tonumber(text)
-                if val then
-                    PP:SetPlayerScore(capturedFullName, val)
-                else
-                    widget:SetText(tostring(entry.score))
-                end
-            end)
-            row:AddChild(scoreBox)
-
-            local plusBtn = AceGUI:Create("Button")
-            plusBtn:SetText("+1")
-            plusBtn:SetWidth(50)
-            local capturedScore = entry.score
-            plusBtn:SetCallback("OnClick", function()
-                PP:SetPlayerScore(capturedFullName, capturedScore + 1)
-            end)
-            row:AddChild(plusBtn)
-
-            local minusBtn = AceGUI:Create("Button")
-            minusBtn:SetText("-1")
-            minusBtn:SetWidth(50)
-            minusBtn:SetCallback("OnClick", function()
-                PP:SetPlayerScore(capturedFullName, math.max(0, capturedScore - 1))
-            end)
-            row:AddChild(minusBtn)
-
-            local removeBtn = AceGUI:Create("Button")
-            removeBtn:SetText("Remove")
-            removeBtn:SetWidth(80)
-            removeBtn:SetCallback("OnClick", function()
-                PP._pendingRemovePlayer = entry.fullName
-                StaticPopup_Show("PP_CONFIRM_REMOVE_PLAYER")
-            end)
-            row:AddChild(removeBtn)
-        end
-
         scroll:AddChild(row)
+
+        local padBot = AceGUI:Create("Label")
+        padBot:SetFullWidth(true)
+        padBot:SetText(" ")
+        padBot:SetHeight(4)
+        scroll:AddChild(padBot)
     end
 
     if #sorted == 0 then
@@ -336,22 +462,21 @@ function PP:DrawRaidsTab(container)
     scroll:SetLayout("List")
     container:AddChild(scroll)
 
-    -- Guild selector dropdown (shown when multiple guild rosters are saved)
-    local guildKeys = {}
-    for gk in pairs(self.db.global.guilds) do
-        guildKeys[#guildKeys + 1] = gk
-    end
-    if #guildKeys > 1 then
+    -- ── Roster selector ──────────────────────────────────────────────────
+    if not PP:IsSandbox() then
         local ddGroup = AceGUI:Create("SimpleGroup")
         ddGroup:SetFullWidth(true)
         ddGroup:SetLayout("Flow")
         scroll:AddChild(ddGroup)
+
         local dd = AceGUI:Create("Dropdown")
-        dd:SetLabel("Guild Roster")
-        dd:SetWidth(240)
-        local items = {}
-        for _, gk in ipairs(guildKeys) do items[gk] = gk end
-        dd:SetList(items)
+        dd:SetLabel("Active Roster")
+        dd:SetWidth(220)
+        local ddItems = {}
+        for gk in pairs(self.db.global.guilds) do
+            ddItems[gk] = PP:GetRosterDisplayName(gk)
+        end
+        dd:SetList(ddItems)
         dd:SetValue(PP:GetActiveGuildKey())
         dd:SetCallback("OnValueChanged", function(_, _, val)
             PP._activeGuildKey = val
@@ -519,7 +644,7 @@ function PP:ShowRaidDetail(raidID)
         local respStr = item.response    and ("  |cFF888888[" .. item.response .. "]|r")       or ""
         local itemRow = AceGUI:Create("Label")
         itemRow:SetFullWidth(true)
-        itemRow:SetText("  " .. (item.itemLink or "Unknown") .. "  →  "
+        itemRow:SetText("  " .. (item.itemLink or "Unknown") .. "  ->  "
             .. self:GetShortName(item.awardedTo) .. ptsStr .. respStr)
         scroll:AddChild(itemRow)
     end
@@ -595,7 +720,80 @@ function PP:DrawSettingsTab(container)
         syncGroup:AddChild(broadcastBtn)
     end
 
-    -- Loot Rules section
+    -- ── Manage Custom Rosters section ───────────────────────────────────────
+    local manageHead = AceGUI:Create("Heading")
+    manageHead:SetFullWidth(true)
+    manageHead:SetText("Manage Custom Rosters")
+    scroll:AddChild(manageHead)
+
+    -- Collect only custom (non-guild) roster keys
+    local customKeys = {}
+    for gk in pairs(PP.db.global.guilds) do
+        if PP:IsCustomRoster(gk) then
+            customKeys[#customKeys + 1] = gk
+        end
+    end
+    table.sort(customKeys, function(a, b)
+        return PP:GetRosterDisplayName(a) < PP:GetRosterDisplayName(b)
+    end)
+
+    if #customKeys == 0 then
+        local noCustom = AceGUI:Create("Label")
+        noCustom:SetFullWidth(true)
+        noCustom:SetText("|cFFAAAAAA  No custom rosters yet. Use the 'New Roster' button on the Roster tab to create one.\n|r")
+        scroll:AddChild(noCustom)
+    else
+        local manageRow = AceGUI:Create("SimpleGroup")
+        manageRow:SetFullWidth(true)
+        manageRow:SetLayout("Flow")
+        scroll:AddChild(manageRow)
+
+        local manageDd = AceGUI:Create("Dropdown")
+        manageDd:SetLabel("Custom Roster")
+        manageDd:SetWidth(180)
+        local manageItems = {}
+        for _, gk in ipairs(customKeys) do
+            manageItems[gk] = PP:GetRosterDisplayName(gk)
+        end
+        manageDd:SetList(manageItems)
+        manageDd:SetValue(customKeys[1])
+        manageRow:AddChild(manageDd)
+
+        local renameBox = AceGUI:Create("EditBox")
+        renameBox:SetLabel("New Name")
+        renameBox:SetWidth(150)
+        renameBox:SetText(PP:GetRosterDisplayName(customKeys[1]))
+        manageDd:SetCallback("OnValueChanged", function(_, _, val)
+            renameBox:SetText(PP:GetRosterDisplayName(val))
+        end)
+        manageRow:AddChild(renameBox)
+
+        local renameBtn = AceGUI:Create("Button")
+        renameBtn:SetText("Rename")
+        renameBtn:SetWidth(90)
+        renameBtn:SetCallback("OnClick", function()
+            local selectedKey = manageDd:GetValue()
+            local newName = renameBox:GetText()
+            if selectedKey and newName and newName:trim() ~= "" then
+                PP:RenameCustomRoster(selectedKey, newName:trim())
+            end
+        end)
+        manageRow:AddChild(renameBtn)
+
+        local deleteBtn = AceGUI:Create("Button")
+        deleteBtn:SetText("Delete")
+        deleteBtn:SetWidth(80)
+        deleteBtn:SetCallback("OnClick", function()
+            local selectedKey = manageDd:GetValue()
+            if selectedKey then
+                PP._pendingDeleteRoster = selectedKey
+                StaticPopup_Show("PP_CONFIRM_DELETE_ROSTER")
+            end
+        end)
+        manageRow:AddChild(deleteBtn)
+    end
+
+    -- ── Loot Rules section
     local lootRulesHead = AceGUI:Create("Heading")
     lootRulesHead:SetFullWidth(true)
     lootRulesHead:SetText("Loot Rules")
@@ -657,7 +855,7 @@ function PP:DrawSettingsTab(container)
     local statusLabel = AceGUI:Create("Label")
     statusLabel:SetFullWidth(true)
     statusLabel:SetText(
-        "Active roster:  |cFFFFD100" .. guildKey .. "|r\n"
+        "Active roster:  |cFFFFD100" .. PP:GetRosterDisplayName(guildKey) .. "|r\n"
      .. "My guild:  " .. myGuild .. "\n"
      .. "Officer:  " .. officer .. "\n"
      .. "Can modify:  " .. canMod .. "\n"
@@ -698,6 +896,7 @@ StaticPopupDialogs["PP_CONFIRM_REMOVE_PLAYER"] = {
     button2 = "Cancel",
     OnAccept = function()
         if PP._pendingRemovePlayer then
+            PP._selectedRosterPlayer = nil
             PP:RemoveFromRoster(PP._pendingRemovePlayer)
             PP._pendingRemovePlayer = nil
         end
@@ -734,12 +933,47 @@ StaticPopupDialogs["PP_CONFIRM_CLEAR_ROSTER"] = {
     hideOnEscape = true,
 }
 
+StaticPopupDialogs["PP_CREATE_ROSTER"] = {
+    text = "Enter a name for the new roster:",
+    button1 = "Create",
+    button2 = "Cancel",
+    hasEditBox = 1,
+    OnAccept = function(dialog)
+        local name = dialog.editBox:GetText()
+        if name and name:trim() ~= "" then
+            PP:CreateCustomRoster(name)
+        end
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+    preferredIndex = 3,
+}
+
 StaticPopupDialogs["PP_CONFIRM_RESET_ADDON"] = {
     text = "Reset ALL Pirates Plunder saved data for this character?\n|cFFFF4400This cannot be undone.|r",
     button1 = "Reset",
     button2 = "Cancel",
     OnAccept = function()
         PP:ResetAddon()
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+}
+
+StaticPopupDialogs["PP_CONFIRM_DELETE_ROSTER"] = {
+    text = "Delete this custom roster and all its data?\n|cFFFF4400This cannot be undone.|r",
+    button1 = "Delete",
+    button2 = "Cancel",
+    OnAccept = function()
+        if PP._pendingDeleteRoster then
+            PP:DeleteCustomRoster(PP._pendingDeleteRoster)
+            PP._pendingDeleteRoster = nil
+        end
+    end,
+    OnCancel = function()
+        PP._pendingDeleteRoster = nil
     end,
     timeout = 0,
     whileDead = true,
