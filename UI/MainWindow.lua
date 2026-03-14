@@ -543,47 +543,13 @@ function PP:DrawSettingsTab(container)
     scroll:SetLayout("List")
     container:AddChild(scroll)
 
-    -- ── Sandbox section ──────────────────────────────────────────────────
-    local sandboxHead = AceGUI:Create("Heading")
-    sandboxHead:SetFullWidth(true)
-    sandboxHead:SetText("Developer / Testing")
-    scroll:AddChild(sandboxHead)
-
+    -- ── Sandbox active banner (command-line toggled, no UI button needed) ────
     if PP:IsSandbox() then
         local banner = AceGUI:Create("Label")
         banner:SetFullWidth(true)
-        banner:SetText("|cFFFFD100⚠ SANDBOX ACTIVE — simulating raid leader. Roster, raid, and loot changes are NOT saved to disk.|r\n")
+        banner:SetText("|cFFFFD100SANDBOX ACTIVE — simulating raid leader. Roster, raid, and loot changes are NOT saved to disk.\nUse /pp sandbox to disable  ·  /pp sandbox mod to toggle raid leader/officer status.|r\n")
         scroll:AddChild(banner)
     end
-
-    local sandboxDesc = AceGUI:Create("Label")
-    sandboxDesc:SetFullWidth(true)
-    sandboxDesc:SetText(
-        "Sandbox mode simulates being in an active raid as the raid leader without needing a real group.\n"
-     .. "Roster changes, raid data, and loot state made while active are |cFFFF4400not written to SavedVariables|r.\n"
-    )
-    scroll:AddChild(sandboxDesc)
-
-    local sandboxBtnGroup = AceGUI:Create("SimpleGroup")
-    sandboxBtnGroup:SetFullWidth(true)
-    sandboxBtnGroup:SetLayout("Flow")
-    scroll:AddChild(sandboxBtnGroup)
-
-    local sandboxBtn = AceGUI:Create("Button")
-    if PP:IsSandbox() then
-        sandboxBtn:SetText("|cFFFF6600Disable Sandbox|r")
-        sandboxBtn:SetWidth(160)
-        sandboxBtn:SetCallback("OnClick", function()
-            PP:DisableSandbox()
-        end)
-    else
-        sandboxBtn:SetText("Enable Sandbox")
-        sandboxBtn:SetWidth(160)
-        sandboxBtn:SetCallback("OnClick", function()
-            PP:EnableSandbox()
-        end)
-    end
-    sandboxBtnGroup:AddChild(sandboxBtn)
 
     -- ── Sync section ─────────────────────────────────────────────────────
     local syncHead = AceGUI:Create("Heading")
