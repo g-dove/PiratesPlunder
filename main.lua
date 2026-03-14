@@ -327,6 +327,7 @@ function PiratesPlunder:GetGuildData(guildKey)
             rosterVersion = 0,
             raids         = {},
             activeRaidID  = nil,
+            deletedRaids  = {},  -- [raidID] = rosterVersion; tombstones for deleted raids
         }
     end
     return self.db.global.guilds[guildKey]

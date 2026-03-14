@@ -230,7 +230,10 @@ function PP:HandleSyncFull(data, sender)
             for id, raid in pairs(incoming.raids) do
                 local local_raid = local_gd.raids[id]
                 if not local_raid then
-                    local_gd.raids[id] = raid
+                    -- Only add if we have no tombstone for this raid
+                    if not (local_gd.deletedRaids and local_gd.deletedRaids[id]) then
+                        local_gd.raids[id] = raid
+                    end
                 else
                     if raid.items and #raid.items > #(local_raid.items or {}) then
                         local_raid.items = raid.items
@@ -241,6 +244,29 @@ function PP:HandleSyncFull(data, sender)
                     if raid.endTime and not local_raid.endTime then
                         local_raid.endTime = raid.endTime
                         local_raid.active  = false
+                    end
+                end
+            end
+        end
+
+        -- Tombstones: apply deletions from the sender that we haven't seen yet
+        if incoming.deletedRaids then
+            if not local_gd.deletedRaids then local_gd.deletedRaids = {} end
+            for raidID, tombVer in pairs(incoming.deletedRaids) do
+                if not local_gd.deletedRaids[raidID] then
+                    -- We haven't recorded this deletion yet – apply it
+                    local_gd.raids[raidID] = nil
+                    local_gd.deletedRaids[raidID] = tombVer
+                    -- Advance our version so future syncs from us carry the tombstone
+                    if tombVer > local_gd.rosterVersion then
+                        local_gd.rosterVersion = tombVer
+                    end
+                    if local_gd.activeRaidID == raidID then
+                        local_gd.activeRaidID = nil
+                        wipe(self.pendingLoot)
+                        self:CloseLootPopups()
+                        self:RefreshLootMasterWindow()
+                        self:RefreshLootResponseFrame()
                     end
                 end
             end
@@ -290,6 +316,10 @@ function PP:HandleRaidDelete(data, sender)
 
     gd.raids[data.raidID] = nil
     gd.rosterVersion = data.version
+
+    -- Record tombstone so this deletion propagates to offline peers via future syncs
+    if not gd.deletedRaids then gd.deletedRaids = {} end
+    gd.deletedRaids[data.raidID] = data.version
 
     if gd.activeRaidID == data.raidID then
         gd.activeRaidID = nil
