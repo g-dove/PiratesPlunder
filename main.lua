@@ -18,7 +18,7 @@ PiratesPlunder.AceGUI = LibStub("AceGUI-3.0")
 -- Constants
 ---------------------------------------------------------------------------
 PiratesPlunder.COMM_PREFIX = "PPLNDR"
-PiratesPlunder.VERSION     = "0.1.0"
+PiratesPlunder.VERSION     = C_AddOns.GetAddOnMetadata(addonName, "Version") or "0.0.0"
 
 -- Comm message types
 PiratesPlunder.MSG = {
@@ -34,6 +34,8 @@ PiratesPlunder.MSG = {
     LOOT_CANCEL    = "LOT_CAN",
     LOOT_UPDATE    = "LOT_UPD",
     RAID_SETTINGS  = "RAD_SET",
+    VERSION_REQUEST = "VER_REQ",
+    VERSION_REPLY   = "VER_REP",
 }
 
 -- Loot response types
@@ -187,12 +189,15 @@ function PiratesPlunder:SlashCommand(input)
     elseif input == "help" then
         self:Print("/pp – Toggle main window")
         self:Print("/pp loot (or /pp l) – Toggle loot-master window")
+        self:Print("/pp version (or /pp v) – Check addon versions across the raid")
         self:Print("/pp sandbox (or /pp s) – Toggle sandbox mode")
         self:Print("/pp sandbox mod (or /pp s m) – Toggle canModify override in sandbox")
         self:Print("/pp status – Show officer detection info")
         self:Print("/pp bagdebug – Diagnose alt+right-click bag hook")
     elseif input == "loot" or input == "l" then
         self:SlashCommandLoot()
+    elseif input == "version" or input == "v" then
+        self:ShowVersionCheckWindow()
     elseif input == "sandbox" or input == "s" then
         if self:IsSandbox() then
             self:DisableSandbox()
