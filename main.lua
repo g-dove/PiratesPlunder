@@ -378,6 +378,21 @@ function PiratesPlunder:RenameCustomRoster(oldKey, newName)
     self:RefreshMainWindow()
 end
 
+-- Deletes a guild roster locally only (does NOT sync to other players).
+function PiratesPlunder:DeleteGuildRoster(key)
+    if not key or self:IsCustomRoster(key) or key == "__sandbox__" then return end
+    self.db.global.guilds[key] = nil
+    if self._activeGuildKey == key then
+        local guild = self:GetPlayerGuild()
+        if guild and guild ~= key and self.db.global.guilds[guild] then
+            self._activeGuildKey = guild
+        else
+            self._activeGuildKey = next(self.db.global.guilds) or nil
+        end
+    end
+    self:RefreshMainWindow()
+end
+
 -- Deletes a custom roster and all its saved data.
 function PiratesPlunder:DeleteCustomRoster(key)
     if not self:IsCustomRoster(key) then return end
@@ -766,11 +781,22 @@ end
 function PiratesPlunder:OnGroupLeft()
     if self:HasActiveRaid() then
         local me = self:GetPlayerFullName()
-        local raid = self:GetActiveRaid()
+        local raid, id = self:GetActiveRaid()
+        -- Clear local active-raid state for everyone who leaves the group.
+        -- For the leader: don't broadcast RAID_CLOSE (we're out of the group channel),
+        -- remaining members get CheckRaidLeaderPresent via GROUP_ROSTER_UPDATE.
+        -- For non-leaders: just clear the stale local pointer so the UI is clean.
+        -- Either way, any loot awarded afterwards will be recovered via RequestSync
+        -- when the player rejoins a group (OnGroupRosterUpdate fires a full sync).
+        local gd = self:GetGuildData(self:GetActiveGuildKey())
+        if gd then gd.activeRaidID = nil end
+        wipe(self.pendingLoot)
+        self:CloseLootPopups()
         if raid and raid.leader == me then
-            self:EndRaid()
-            self:Print("Raid ended – you left the group.")
+            self:Print("You left the group. The active raid has been closed on your end.")
         end
+        self:RefreshMainWindow()
+        self:RefreshLootMasterWindow()
     end
     -- Reset active guild to own guild when leaving the group (nil if not guilded)
     self._activeGuildKey = self:GetPlayerGuild() or nil

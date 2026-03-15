@@ -155,16 +155,18 @@ function PP:CheckRaidLeaderPresent()
     -- If a continuation prompt is already pending, don't fire again
     if self._pendingContinueRaidID then return end
 
-    -- Check if the original raid leader is still in the group
-    local leaderPresent = false
+    -- Check if the original raid leader is still in the group AND still holds rank 2.
+    -- If they passed lead to someone else they'll still be present but rank will have
+    -- dropped, so we still need to offer the continuation prompt to the new leader.
+    local leaderStillLeading = false
     for i = 1, GetNumGroupMembers() do
-        local name = GetRaidRosterInfo(i)
-        if name and self:GetFullName(name) == raid.leader then
-            leaderPresent = true
+        local name, rank = GetRaidRosterInfo(i)
+        if name and self:GetFullName(name) == raid.leader and rank == 2 then
+            leaderStillLeading = true
             break
         end
     end
-    if leaderPresent then return end
+    if leaderStillLeading then return end
 
     -- Original leader is gone. Find the new raid leader (rank == 2).
     local newLeader = nil

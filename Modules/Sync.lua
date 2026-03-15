@@ -221,7 +221,16 @@ end
 -- Receive full sync data
 function PP:HandleSyncFull(data, sender)
     if not data or not data.guilds then return end
+    -- Only accept data for guild keys we already know about or that match our
+    -- own guild / active key.  This prevents foreign guild records from being
+    -- auto-created in our database just because an officer has stale history.
+    local myGuild   = self:GetPlayerGuild()
+    local activeKey = self:GetActiveGuildKey()
     for gk, incoming in pairs(data.guilds) do
+        -- Skip keys that are wholly foreign to this client
+        if gk ~= myGuild and gk ~= activeKey and not self.db.global.guilds[gk] then
+            -- (do nothing – ignore this guild's data entirely)
+        else
         local local_gd = self:GetGuildData(gk)
         -- Roster: take higher version
         if incoming.rosterVersion and incoming.rosterVersion > local_gd.rosterVersion then
@@ -277,6 +286,7 @@ function PP:HandleSyncFull(data, sender)
         if incoming.activeRaidID then
             local_gd.activeRaidID = incoming.activeRaidID
         end
+        end -- else (guild key is known/relevant)
     end
     self:RefreshMainWindow()
 end

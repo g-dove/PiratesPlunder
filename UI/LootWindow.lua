@@ -444,7 +444,7 @@ function PP:DrawLootMasterContent(container)
 
             local clearBtn = AceGUI:Create("Button")
             clearBtn:SetText("Clear")
-            clearBtn:SetWidth(60)
+            clearBtn:SetWidth(150)
             local capturedIdx = tIdx
             clearBtn:SetCallback("OnClick", function()
                 table.remove(PP.pendingTrades, capturedIdx)

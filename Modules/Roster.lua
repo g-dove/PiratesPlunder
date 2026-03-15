@@ -7,12 +7,11 @@ local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 -- Auto-populate roster from current raid/party
 ---------------------------------------------------------------------------
 function PP:AutoPopulateRoster()
-    if not IsInGroup() then return end
-    local prefix = IsInRaid() and "raid" or "party"
-    local count  = GetNumGroupMembers()
+    if not IsInRaid() then return end
+    local count = GetNumGroupMembers()
 
     for i = 1, count do
-        local unit = (prefix == "party" and i == count) and "player" or (prefix .. i)
+        local unit = "raid" .. i
         local name, realm = UnitName(unit)
         if name and name ~= UNKNOWNOBJECT and name ~= "" then
             local fullName = self:GetFullName(name .. (realm and realm ~= "" and ("-" .. realm) or ""))

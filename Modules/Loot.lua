@@ -194,6 +194,24 @@ function PP:ReceiveLootInterest(key, playerName, response, score, comp)
     }
     self:SavePendingLoot()
     self:RefreshLootMasterWindow()
+
+    -- C_Item.GetItemInfo returns nil for uncached items and queues a server
+    -- fetch.  Schedule a deferred re-render so equipped-item icons and ilvl
+    -- diffs appear once the data arrives rather than waiting for the next
+    -- manual action (e.g. voting) to trigger a refresh.
+    if comp and comp.equippedLinks and #comp.equippedLinks > 0 then
+        local needsDeferred = false
+        for _, eLink in ipairs(comp.equippedLinks) do
+            if not C_Item.GetItemInfo(eLink) then
+                needsDeferred = true
+            end
+        end
+        if needsDeferred then
+            self:ScheduleTimer(function()
+                self:RefreshLootMasterWindow()
+            end, 2)
+        end
+    end
 end
 
 ---------------------------------------------------------------------------

@@ -830,6 +830,62 @@ function PP:DrawSettingsTab(container)
         manageRow:AddChild(deleteBtn)
     end
 
+    -- ── Manage Guild Rosters section ─────────────────────────────────────────
+    local guildRosterHead = AceGUI:Create("Heading")
+    guildRosterHead:SetFullWidth(true)
+    guildRosterHead:SetText("Manage Guild Rosters")
+    scroll:AddChild(guildRosterHead)
+
+    local guildRosterDesc = AceGUI:Create("Label")
+    guildRosterDesc:SetFullWidth(true)
+    guildRosterDesc:SetText("|cFFAAAAAA  Locally remove a guild roster record from your client. "
+        .. "This does |cFFFF4400not|r|cFFAAAAAA sync to other players.|r\n")
+    scroll:AddChild(guildRosterDesc)
+
+    -- Collect guild (non-custom, non-sandbox) roster keys
+    local guildKeys = {}
+    for gk in pairs(PP.db.global.guilds) do
+        if not PP:IsCustomRoster(gk) and gk ~= "__sandbox__" then
+            guildKeys[#guildKeys + 1] = gk
+        end
+    end
+    table.sort(guildKeys)
+
+    if #guildKeys == 0 then
+        local noGuild = AceGUI:Create("Label")
+        noGuild:SetFullWidth(true)
+        noGuild:SetText("|cFFAAAAAA  No guild rosters on record.\n|r")
+        scroll:AddChild(noGuild)
+    else
+        local guildManageRow = AceGUI:Create("SimpleGroup")
+        guildManageRow:SetFullWidth(true)
+        guildManageRow:SetLayout("Flow")
+        scroll:AddChild(guildManageRow)
+
+        local guildDd = AceGUI:Create("Dropdown")
+        guildDd:SetLabel("Guild Roster")
+        guildDd:SetWidth(220)
+        local guildItems = {}
+        for _, gk in ipairs(guildKeys) do
+            guildItems[gk] = gk
+        end
+        guildDd:SetList(guildItems)
+        guildDd:SetValue(guildKeys[1])
+        guildManageRow:AddChild(guildDd)
+
+        local guildDeleteBtn = AceGUI:Create("Button")
+        guildDeleteBtn:SetText("Delete Locally")
+        guildDeleteBtn:SetWidth(130)
+        guildDeleteBtn:SetCallback("OnClick", function()
+            local selectedKey = guildDd:GetValue()
+            if selectedKey then
+                PP._pendingDeleteGuildRoster = selectedKey
+                StaticPopup_Show("PP_CONFIRM_DELETE_GUILD_ROSTER")
+            end
+        end)
+        guildManageRow:AddChild(guildDeleteBtn)
+    end
+
     -- ── Loot Rules section
     local lootRulesHead = AceGUI:Create("Heading")
     lootRulesHead:SetFullWidth(true)
@@ -993,6 +1049,24 @@ StaticPopupDialogs["PP_CONFIRM_RESET_ADDON"] = {
     button2 = "Cancel",
     OnAccept = function()
         PP:ResetAddon()
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+}
+
+StaticPopupDialogs["PP_CONFIRM_DELETE_GUILD_ROSTER"] = {
+    text = "Delete this guild roster from your client?\n|cFFFF4400This only affects your local data and will NOT sync to other players.|r",
+    button1 = "Delete Locally",
+    button2 = "Cancel",
+    OnAccept = function()
+        if PP._pendingDeleteGuildRoster then
+            PP:DeleteGuildRoster(PP._pendingDeleteGuildRoster)
+            PP._pendingDeleteGuildRoster = nil
+        end
+    end,
+    OnCancel = function()
+        PP._pendingDeleteGuildRoster = nil
     end,
     timeout = 0,
     whileDead = true,
