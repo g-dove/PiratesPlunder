@@ -268,14 +268,14 @@ function PP:DrawLootMasterContent(container)
                 -- Icons for each equipped item with individual tooltips.
                 -- ilvl diff is computed here from the item being distributed
                 -- vs each equipped link, so it never travels in messages.
-                local compGroup = AceGUI:Create("SimpleGroup")
-                compGroup:SetLayout("Flow")
-                compGroup:SetWidth(130)
-                compGroup.frame:EnableMouse(false)
-                rRow:AddChild(compGroup)
-
                 local hasComp = resp.equippedLinks ~= nil
                 if hasComp then
+                    local compGroup = AceGUI:Create("SimpleGroup")
+                    compGroup:SetLayout("Flow")
+                    compGroup:SetWidth(130)
+                    compGroup.frame:EnableMouse(false)
+                    rRow:AddChild(compGroup)
+
                     -- Compute best ilvl diff locally from the distributed item
                     local _, _, _, newIlvl = C_Item.GetItemInfo(item.itemLink)
                     local bestDiff = nil
@@ -320,6 +320,12 @@ function PP:DrawLootMasterContent(container)
                     end
                     diffLbl:SetWidth(70)
                     compGroup:AddChild(diffLbl)
+                else
+                    -- No comparison data: add a fixed-width spacer label so columns stay aligned
+                    local spacer = AceGUI:Create("Label")
+                    spacer:SetWidth(130)
+                    spacer:SetText("")
+                    rRow:AddChild(spacer)
                 end
 
                 -- Vote tally for this responder
@@ -435,7 +441,7 @@ function PP:DrawLootMasterContent(container)
             container:AddChild(tRow)
 
             local tLabel = AceGUI:Create("Label")
-            tLabel:SetText("  " .. (trade.itemLink or "Item") .. "  →  " .. self:GetShortName(trade.awardedTo))
+            tLabel:SetText("  " .. (trade.itemLink or "Item") .. "  ->  " .. self:GetShortName(trade.awardedTo))
             tLabel:SetWidth(450)
             tRow:AddChild(tLabel)
 
@@ -444,7 +450,7 @@ function PP:DrawLootMasterContent(container)
 
             local clearBtn = AceGUI:Create("Button")
             clearBtn:SetText("Clear")
-            clearBtn:SetWidth(150)
+            clearBtn:SetWidth(80)
             local capturedIdx = tIdx
             clearBtn:SetCallback("OnClick", function()
                 table.remove(PP.pendingTrades, capturedIdx)
@@ -572,10 +578,17 @@ function PP:RefreshLootResponseFrame()
     local rowHeight  = textH + btnGap + btnHeight + rowPadBot  -- 60
     local itemCount  = 0
 
-    -- Frame width depends on whether transmog is globally enabled.
-    -- textX + N buttons * btnWidth + (N-1) gaps * 6 + outer margins
-    local tmogGlobal = PP.db.global.allowTransmogRolls ~= false
-    local numBtns = tmogGlobal and 4 or 3
+    -- Frame width depends on whether any pending item has transmog enabled.
+    -- We check the individual entry flags (synced from the poster) rather than
+    -- the local setting, which may differ from the raid leader's.
+    local anyTmog = false
+    for _, entry in pairs(self.pendingLoot) do
+        if not entry.awarded and entry.allowTransmog ~= false then
+            anyTmog = true
+            break
+        end
+    end
+    local numBtns = anyTmog and 4 or 3
     local contentWidth = textX + numBtns * btnWidth + (numBtns - 1) * 6
     local frameWidth   = contentWidth + iconPad + 24   -- matching right margin
     f:SetWidth(frameWidth)
@@ -752,7 +765,7 @@ function PP:CreateLootReopenButton()
     local btn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     btn:SetSize(128, 22)
     btn:SetPoint("CENTER")
-    btn:SetText("|cFF33CCFF▸|r PP Loot")
+    btn:SetText("|cFF33CCFF>>|r PP Loot")
     btn:SetScript("OnClick", function()
         f:Hide()
         PP:ShowLootResponseFrame()
