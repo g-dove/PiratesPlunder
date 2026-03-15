@@ -789,7 +789,14 @@ function PiratesPlunder:OnGroupLeft()
         -- Either way, any loot awarded afterwards will be recovered via RequestSync
         -- when the player rejoins a group (OnGroupRosterUpdate fires a full sync).
         local gd = self:GetGuildData(self:GetActiveGuildKey())
-        if gd then gd.activeRaidID = nil end
+        if gd then
+            gd.activeRaidID = nil
+            -- Also mark the raid record itself as ended so the UI shows [ENDED]
+            if id and gd.raids and gd.raids[id] then
+                gd.raids[id].active  = false
+                gd.raids[id].endTime = gd.raids[id].endTime or time()
+            end
+        end
         wipe(self.pendingLoot)
         self:CloseLootPopups()
         if raid and raid.leader == me then
