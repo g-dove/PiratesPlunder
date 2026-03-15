@@ -60,6 +60,7 @@ function PP:PostLoot(itemLink)
         postedBy      = self:GetPlayerFullName(),
         postedAt      = GetTime(),
         responses     = {},  -- fullName => { response, score, roll }
+        votes         = {},  -- voterFullName => targetFullName
         awarded       = false,
         awardedTo     = nil,
         allowTransmog = self.db.global.allowTransmogRolls ~= false,
@@ -235,7 +236,19 @@ function PP:GetSortedResponses(key)
                 score         = resp.score,
                 roll          = resp.roll,
                 equippedLinks = resp.equippedLinks,
+                voteCount     = 0,  -- filled below
             }
+        end
+    end
+
+    -- Count votes per target from the votes table
+    local votes = entry.votes or {}
+    for _, target in pairs(votes) do
+        for _, r in ipairs(list) do
+            if r.fullName == target then
+                r.voteCount = r.voteCount + 1
+                break
+            end
         end
     end
 
@@ -342,10 +355,35 @@ function PP:AwardItem(key, fullName, free)
 end
 
 ---------------------------------------------------------------------------
+-- Vote on who should receive an item (officers / raid leader – observer mode)
+-- Each voter may hold at most one vote per loot key; casting again replaces the
+-- previous vote, allowing observers to change their mind before the item is awarded.
+---------------------------------------------------------------------------
+function PP:CastVote(key, targetFullName)
+    if not self.pendingLoot[key] then return end
+    local me = self:GetPlayerFullName()
+    self:ReceiveVote(key, me, targetFullName)
+    self:SendAddonMessage(PP.MSG.LOOT_VOTE, {
+        key    = key,
+        voter  = me,
+        target = targetFullName,
+    })
+end
+
+function PP:ReceiveVote(key, voterName, targetFullName)
+    if not self.pendingLoot[key] then return end
+    if not self.pendingLoot[key].votes then
+        self.pendingLoot[key].votes = {}
+    end
+    self.pendingLoot[key].votes[voterName] = targetFullName
+    self:SavePendingLoot()
+    self:RefreshLootMasterWindow()
+end
+
+---------------------------------------------------------------------------
 -- Close all loot popups
 ---------------------------------------------------------------------------
-function PP:CloseLootPopups()
-    for key, frame in pairs(self.lootPopups) do
+function PP:CloseLootPopups()    for key, frame in pairs(self.lootPopups) do
         if frame and frame.Hide then frame:Hide() end
     end
     wipe(self.lootPopups)

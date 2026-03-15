@@ -16,6 +16,10 @@ function PP:ToggleLootMasterWindow()
         self.lootMasterWindow = nil
         return
     end
+    if not self:CanViewLootMaster() then
+        self:Print("Only officers and the raid leader can access the loot master window.")
+        return
+    end
     self:CreateLootMasterWindow()
 end
 
@@ -28,7 +32,7 @@ function PP:CreateLootMasterWindow()
     local f = AceGUI:Create("Frame")
     f:SetTitle("Pirates Plunder – Loot Master")
     f:SetLayout("Fill")
-    f:SetWidth(700)
+    f:SetWidth(800)
     f:SetHeight(500)
     f:SetCallback("OnClose", function(widget)
         AceGUI:Release(widget)
@@ -56,7 +60,11 @@ function PP:DrawLootMasterContent(container)
     if not container then return end
     container:ReleaseChildren()
 
+    local me      = self:GetPlayerFullName()
+    local canPost = self:CanPostLoot()
+
     -- ── Loot Queue ──────────────────────────────────────────────────────────
+    if canPost then
     local queueHead = AceGUI:Create("Heading")
     queueHead:SetFullWidth(true)
     queueHead:SetText("Loot Queue")
@@ -131,6 +139,7 @@ function PP:DrawLootMasterContent(container)
         emptyQ:SetText("|cFF888888  Queue is empty.|r")
         container:AddChild(emptyQ)
     end
+    end -- canPost: loot queue section
 
     -- ── Items Being Distributed ─────────────────────────────────────────────
     local heading = AceGUI:Create("Heading")
@@ -155,8 +164,13 @@ function PP:DrawLootMasterContent(container)
         itemGroup:SetLayout("List")
         container:AddChild(itemGroup)
 
-        -- Tooltip on the item group title area
-        self:AddItemTooltip(itemGroup.frame, item.itemLink)
+        -- Tooltip only when hovering the item name in the title bar
+        local titleOverlay = CreateFrame("Frame", nil, itemGroup.frame)
+        titleOverlay:SetPoint("TOPLEFT",  itemGroup.frame, "TOPLEFT",  14, -1)
+        titleOverlay:SetPoint("TOPRIGHT", itemGroup.frame, "TOPRIGHT", -14, -1)
+        titleOverlay:SetHeight(18)
+        titleOverlay:EnableMouse(true)
+        self:AddItemTooltip(titleOverlay, item.itemLink)
 
         -- Response count info
         local infoRow = AceGUI:Create("SimpleGroup")
@@ -210,6 +224,11 @@ function PP:DrawLootMasterContent(container)
             rh6:SetText("|cFFFFD100Equipped|r")
             rh6:SetWidth(130)
             hdrRow:AddChild(rh6)
+
+            local rh7 = AceGUI:Create("Label")
+            rh7:SetText("|cFFFFD100Votes|r")
+            rh7:SetWidth(55)
+            hdrRow:AddChild(rh7)
 
             for rIdx, resp in ipairs(responses) do
                 local rRow = AceGUI:Create("SimpleGroup")
@@ -303,23 +322,58 @@ function PP:DrawLootMasterContent(container)
                     compGroup:AddChild(diffLbl)
                 end
 
-                local awardBtn = AceGUI:Create("Button")
-                awardBtn:SetText("Award")
-                awardBtn:SetWidth(70)
+                -- Vote tally for this responder
+                local voteCount = resp.voteCount or 0
+                local voteCountLbl = AceGUI:Create("Label")
+                voteCountLbl:SetText(voteCount > 0
+                    and "|cFFFFD100" .. voteCount .. "|r"
+                    or  "|cFF888888-|r")
+                voteCountLbl:SetWidth(55)
+                rRow:AddChild(voteCountLbl)
+
+                -- Action buttons: poster gets Award / Free; observers get Vote
                 local capturedKey  = item.key
                 local capturedName = resp.fullName
-                awardBtn:SetCallback("OnClick", function()
-                    PP:AwardItem(capturedKey, capturedName)
-                end)
-                rRow:AddChild(awardBtn)
+                if item.postedBy == me then
+                    local awardBtn = AceGUI:Create("Button")
+                    awardBtn:SetText("Award")
+                    awardBtn:SetWidth(70)
+                    awardBtn:SetCallback("OnClick", function()
+                        PP:AwardItem(capturedKey, capturedName)
+                    end)
+                    rRow:AddChild(awardBtn)
 
-                local freeBtn = AceGUI:Create("Button")
-                freeBtn:SetText("|cFF00FF00Free|r")
-                freeBtn:SetWidth(60)
-                freeBtn:SetCallback("OnClick", function()
-                    PP:AwardItem(capturedKey, capturedName, true)
-                end)
-                rRow:AddChild(freeBtn)
+                    local freeBtn = AceGUI:Create("Button")
+                    freeBtn:SetText("|cFF00FF00Free|r")
+                    freeBtn:SetWidth(60)
+                    freeBtn:SetCallback("OnClick", function()
+                        PP:AwardItem(capturedKey, capturedName, true)
+                    end)
+                    rRow:AddChild(freeBtn)
+
+                    local lootEntry = PP.pendingLoot[item.key]
+                    local myVote    = lootEntry and lootEntry.votes and lootEntry.votes[me]
+                    local votedThis = myVote == resp.fullName
+                    local voteBtn = AceGUI:Create("Button")
+                    voteBtn:SetWidth(65)
+                    voteBtn:SetText(votedThis and "|cFF00FF00Vote|r" or "Vote")
+                    voteBtn:SetCallback("OnClick", function()
+                        PP:CastVote(capturedKey, capturedName)
+                    end)
+                    rRow:AddChild(voteBtn)
+                else
+                    -- Observer (officer / RL who didn't post this item): one vote per item
+                    local lootEntry = PP.pendingLoot[item.key]
+                    local myVote    = lootEntry and lootEntry.votes and lootEntry.votes[me]
+                    local votedThis = myVote == resp.fullName
+                    local voteBtn = AceGUI:Create("Button")
+                    voteBtn:SetWidth(65)
+                    voteBtn:SetText(votedThis and "|cFF00FF00Vote|r" or "Vote")
+                    voteBtn:SetCallback("OnClick", function()
+                        PP:CastVote(capturedKey, capturedName)
+                    end)
+                    rRow:AddChild(voteBtn)
+                end
             end
         else
             local noResp = AceGUI:Create("Label")
@@ -354,19 +408,21 @@ function PP:DrawLootMasterContent(container)
             end
         end
 
-        -- Cancel button
-        local cancelBtn = AceGUI:Create("Button")
-        cancelBtn:SetText("Cancel")
-        cancelBtn:SetWidth(80)
-        local capturedItemKey = item.key
-        cancelBtn:SetCallback("OnClick", function()
-            PP:CancelLoot(capturedItemKey)
-        end)
-        itemGroup:AddChild(cancelBtn)
+        -- Cancel button (poster only)
+        if item.postedBy == me then
+            local cancelBtn = AceGUI:Create("Button")
+            cancelBtn:SetText("Cancel")
+            cancelBtn:SetWidth(80)
+            local capturedItemKey = item.key
+            cancelBtn:SetCallback("OnClick", function()
+                PP:CancelLoot(capturedItemKey)
+            end)
+            itemGroup:AddChild(cancelBtn)
+        end
     end
 
-    -- Pending trades section with clear buttons
-    if #self.pendingTrades > 0 then
+    -- Pending trades section with clear buttons (poster's view only)
+    if canPost and #self.pendingTrades > 0 then
         local tradeHead = AceGUI:Create("Heading")
         tradeHead:SetFullWidth(true)
         tradeHead:SetText("Pending Trades")

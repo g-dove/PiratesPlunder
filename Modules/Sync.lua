@@ -67,6 +67,9 @@ function PP:OnCommReceived(prefix, message, distribution, sender)
     elseif msgType == PP.MSG.LOOT_UPDATE then
         self:HandleLootUpdate(data)
 
+    elseif msgType == PP.MSG.LOOT_VOTE then
+        self:HandleLootVote(data, sender)
+
     elseif msgType == PP.MSG.RAID_SETTINGS then
         self:HandleRaidSettings(data, sender)
 
@@ -381,6 +384,7 @@ function PP:HandleLootPost(data, sender)
         postedBy      = data.postedBy or sender,
         postedAt      = GetTime(),
         responses     = {},
+        votes         = {},
         awarded       = false,
         awardedTo     = nil,
         allowTransmog = data.allowTransmog ~= false,  -- default true
@@ -436,6 +440,13 @@ function PP:HandleLootAward(data, sender)
     self:RefreshLootMasterWindow()
     self:RefreshLootResponseFrame()
     self:RefreshMainWindow()
+end
+
+-- Vote cast by an officer or the raid leader suggesting a recipient
+function PP:HandleLootVote(data, sender)
+    if not data or not data.key or not data.target then return end
+    local voter = data.voter or sender
+    self:ReceiveVote(data.key, voter, data.target)
 end
 
 -- Loot item flag updated (e.g. allowTransmog toggled by loot master)

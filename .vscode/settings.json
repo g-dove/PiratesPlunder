@@ -66,5 +66,8 @@
         "ContainerFrameCombinedBags",
         "NUM_CONTAINER_FRAMES",
         "ContainerFrameItemButton_OnClick"
+    ],
+    "Lua.diagnostics.disable": [
+        "assign-type-mismatch"
     ]
 }

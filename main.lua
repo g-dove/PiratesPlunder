@@ -35,6 +35,7 @@ PiratesPlunder.MSG = {
     LOOT_UPDATE    = "LOT_UPD",
     RAID_SETTINGS  = "RAD_SET",
     RAID_DELETE    = "RAD_DEL",
+    LOOT_VOTE      = "LOT_VOT",
     VERSION_REQUEST = "VER_REQ",
     VERSION_REPLY   = "VER_REP",
 }
@@ -568,6 +569,14 @@ function PiratesPlunder:CanModify()
     return myGuild ~= nil and myGuild == activeKey
 end
 
+-- Whether the current player may open the loot master window (post OR observe).
+-- Officers of the active guild and the raid leader/assist qualify.
+function PiratesPlunder:CanViewLootMaster()
+    if self._sandbox then return self._sandboxModOverride ~= false end
+    if not self:HasActiveRaid() then return false end
+    return self:CanPostLoot() or self:IsOfficerOrHigher()
+end
+
 -- Whether the current player may post loot for rolling.
 -- Custom rosters: raid leader only.
 -- Guild rosters: officer or raid-leader/assist.
@@ -641,6 +650,7 @@ function PiratesPlunder:SavePendingLoot()
                 itemID    = entry.itemID,
                 postedBy  = entry.postedBy,
                 responses = entry.responses or {},
+                votes     = entry.votes or {},
             }
         end
     end
@@ -661,6 +671,7 @@ function PiratesPlunder:RestorePendingLoot()
             postedBy  = saved.postedBy,
             postedAt  = GetTime(),
             responses = saved.responses or {},
+            votes     = saved.votes or {},
             awarded   = false,
             awardedTo = nil,
         }
