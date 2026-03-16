@@ -1,4 +1,6 @@
-changelog-file: CHANGELOG.md
+manual-changelog:
+    filename: CHANGELOG.txt
+    markup-type: markdown
 
 ignore:
   - .pkgmeta
