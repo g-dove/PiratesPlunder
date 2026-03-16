@@ -3,6 +3,5 @@ manual-changelog:
     markup-type: markdown
 
 ignore:
-  - .pkgmeta
   - .vscode
   - .gitignore
