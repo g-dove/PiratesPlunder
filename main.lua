@@ -768,6 +768,10 @@ function PiratesPlunder:OnGroupRosterUpdate()
     if self:HasActiveRaid() and IsInRaid() then
         self:AutoPopulateRoster()
         self:CheckRaidLeaderPresent()
+        -- Push the leader's autoPassEpicRolls setting to anyone who just joined
+        if self:IsRaidLeader() then
+            self:BroadcastRaidSettings()
+        end
     end
     self:RefreshMainWindow()
 end
@@ -822,8 +826,10 @@ end
 -- Auto-pass in-game loot rolls of Epic+ quality for non-leaders
 function PiratesPlunder:OnStartLootRoll(_, rollID)
     if not self.db.global.autoPassEpicRolls then return end
-    -- Leaders and officers roll normally
-    if self:IsRaidLeaderOrAssist() or self:IsOfficerOrHigher() then return end
+    -- Only auto-pass when there is an active addon-managed raid
+    if not self:HasActiveRaid() then return end
+    -- Leaders and officers roll normally       
+    if self:IsRaidLeader() then return end
     local _, _, _, quality = GetLootRollItemInfo(rollID)
     if quality and quality >= 4 then  -- 4 = Epic, 5 = Legendary, …
         RollOnLoot(rollID, 0)  -- 0 = Pass

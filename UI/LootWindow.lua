@@ -58,6 +58,9 @@ end
 
 function PP:DrawLootMasterContent(container)
     if not container then return end
+    -- Save scroll position before releasing (ReleaseChildren wipes it synchronously)
+    local lmSt = container.status or container.localstatus
+    local savedLmScroll = lmSt and lmSt.scrollvalue or 0
     container:ReleaseChildren()
 
     local me      = self:GetPlayerFullName()
@@ -472,6 +475,10 @@ function PP:DrawLootMasterContent(container)
     -- Force the ScrollFrame to recalculate its scroll height after all
     -- children (including nested InlineGroups) have been laid out.
     container:DoLayout()
+    -- Restore scroll position after layout settles
+    if savedLmScroll > 0 then
+        C_Timer.After(0, function() if container.SetScroll then container:SetScroll(savedLmScroll) end end)
+    end
 end
 
 -- =========================================================================
@@ -717,7 +724,8 @@ function PP:RefreshLootResponseFrame()
     local totalHeight = 40 + yOffset + 8
     f:SetHeight(math.max(80, totalHeight))
     container:SetHeight(yOffset)
-    f:Show()
+    -- Do NOT call f:Show() here — only ShowLootResponseFrame() should open the frame.
+    -- Refreshing should never reopen a frame the player has minimised.
 end
 
 -- Legacy redirect — still called from Sync.lua HandleLootPost
