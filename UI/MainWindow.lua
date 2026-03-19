@@ -74,6 +74,12 @@ end
 -- Roster tab
 ---------------------------------------------------------------------------
 function PP:DrawRosterTab(container)
+    -- Save scroll position before releasing (ReleaseChildren wipes it synchronously)
+    local savedRosterScroll = 0
+    if self._rosterScroll then
+        local st = self._rosterScroll.status or self._rosterScroll.localstatus
+        savedRosterScroll = st and st.scrollvalue or 0
+    end
     container:ReleaseChildren()
     -- Always re-check officer status in case guild roster was not ready earlier
     PP:RefreshOfficerStatus()
@@ -96,6 +102,7 @@ function PP:DrawRosterTab(container)
     scroll:SetFullHeight(true)
     scroll:SetLayout("List")
     container:AddChild(scroll)
+    self._rosterScroll = scroll
 
     -- ── Roster selector ──────────────────────────────────────────────────
     if not PP:IsSandbox() then
@@ -465,12 +472,22 @@ function PP:DrawRosterTab(container)
         empty:SetText("\n  No players in roster. Join a raid or add players manually.")
         scroll:AddChild(empty)
     end
+    -- Restore scroll position after layout settles
+    if savedRosterScroll > 0 then
+        C_Timer.After(0, function() if scroll.SetScroll then scroll:SetScroll(savedRosterScroll) end end)
+    end
 end
 
 ---------------------------------------------------------------------------
 -- Raids tab
 ---------------------------------------------------------------------------
 function PP:DrawRaidsTab(container)
+    -- Save scroll position before releasing (ReleaseChildren wipes it synchronously)
+    local savedRaidsScroll = 0
+    if self._raidsScroll then
+        local st = self._raidsScroll.status or self._raidsScroll.localstatus
+        savedRaidsScroll = st and st.scrollvalue or 0
+    end
     container:ReleaseChildren()
     local canModify = self:CanModify()
 
@@ -480,6 +497,7 @@ function PP:DrawRaidsTab(container)
     scroll:SetFullHeight(true)
     scroll:SetLayout("List")
     container:AddChild(scroll)
+    self._raidsScroll = scroll
 
     -- ── Roster selector ──────────────────────────────────────────────────
     if not PP:IsSandbox() then
@@ -578,6 +596,10 @@ function PP:DrawRaidsTab(container)
         empty:SetFullWidth(true)
         empty:SetText("\n  No raids recorded yet.")
         scroll:AddChild(empty)
+    end
+    -- Restore scroll position after layout settles
+    if savedRaidsScroll > 0 then
+        C_Timer.After(0, function() if scroll.SetScroll then scroll:SetScroll(savedRaidsScroll) end end)
     end
 end
 
