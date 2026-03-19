@@ -724,7 +724,8 @@ function PP:RefreshLootResponseFrame()
     local totalHeight = 40 + yOffset + 8
     f:SetHeight(math.max(80, totalHeight))
     container:SetHeight(yOffset)
-    f:Show()
+    -- Do NOT call f:Show() here — only ShowLootResponseFrame() should open the frame.
+    -- Refreshing should never reopen a frame the player has minimised.
 end
 
 -- Legacy redirect — still called from Sync.lua HandleLootPost
