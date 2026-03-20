@@ -530,7 +530,13 @@ function PP:ShowLootResponseFrame()
     })
     f:SetBackdropColor(0, 0, 0, 0.92)
 
-    -- DO NOT add to UISpecialFrames — ESC should NOT close this
+    -- Add to UISpecialFrames so ESC hides the frame
+    tinsert(UISpecialFrames, "PPLootResponseFrame")
+
+    -- When the frame is hidden (by ESC or the X button), show the reopen button
+    f:SetScript("OnHide", function()
+        PP:ShowLootReopenButton()
+    end)
 
     -- Hide reopen btn whenever the full response frame is visible
     self:HideLootReopenButton()
@@ -546,7 +552,7 @@ function PP:ShowLootResponseFrame()
     closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -2, -2)
     closeBtn:SetScript("OnClick", function()
         f:Hide()
-        PP:ShowLootReopenButton()
+        -- OnHide script fires on Hide() and calls ShowLootReopenButton()
     end)
 
     -- Scroll-child container for item rows

@@ -33,8 +33,8 @@ local EQUIP_SLOT_MAP = {
 -- Post an item for distribution (officer / raid leader only)
 ---------------------------------------------------------------------------
 function PP:PostLoot(itemLink)
-    if not self:HasActiveRaid() then
-        self:Print("No active raid.")
+    if not self:HasActiveSession() then
+        self:Print("No active session.")
         return
     end
     if not self:CanPostLoot() then
@@ -331,8 +331,8 @@ function PP:AwardItem(key, fullName, free)
         })
     end
 
-    -- Record in raid history with cost info
-    self:RecordItemAward(entry.itemLink, entry.itemID, fullName, pointsSpent, winnerResponse)
+    -- Record in session history with cost info (key stored for LOOT_STATE_QUERY matching)
+    self:RecordItemAward(entry.itemLink, entry.itemID, fullName, pointsSpent, winnerResponse, key)
 
     -- Add to pending trades ONLY if the awardee is not the loot master
     local me = self:GetPlayerFullName()

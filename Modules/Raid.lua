@@ -4,80 +4,80 @@
 local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 
 ---------------------------------------------------------------------------
--- Create a new raid
+-- Create a new session
 ---------------------------------------------------------------------------
-function PP:CreateRaid(raidName)
+function PP:CreateSession(raidName)
     if not self:CanModify() then
-        self:Print("Only officers can create a raid.")
+        self:Print("Only officers can create a session.")
         return
     end
-    if self:HasActiveRaid() then
-        self:Print("A raid is already active. Close it before creating a new one.")
+    if self:HasActiveSession() then
+        self:Print("A session is already active. Close it before creating a new one.")
         return
     end
     if not IsInRaid() then
-        self:Print("You must be in a raid group to create a raid.")
+        self:Print("You must be in a raid group to create a session.")
         return
     end
 
-    local raidID   = tostring(time()) .. "-" .. math.random(1000, 9999)
-    local leader   = self:GetPlayerFullName()
-    local gk       = self:GetActiveGuildKey()
-    local gd       = self:GetGuildData(gk)
-    raidName       = raidName or ("Raid " .. date("%Y-%m-%d %H:%M"))
+    local sessionID = tostring(time()) .. "-" .. math.random(1000, 9999)
+    local leader    = self:GetPlayerFullName()
+    local gk        = self:GetActiveGuildKey()
+    local gd        = self:GetGuildData(gk)
+    raidName        = raidName or ("Session " .. date("%Y-%m-%d %H:%M"))
 
-    gd.raids[raidID] = {
+    gd.sessions[sessionID] = {
         name      = raidName,
         startTime = time(),
         endTime   = nil,
         leader    = leader,
         guildKey  = gk,
-        items     = {},   -- { itemLink, itemID, awardedTo }
+        items     = {},   -- { itemLink, itemID, awardedTo, key }
         bosses    = {},   -- { encounterID, encounterName, time }
         members   = {},   -- fullName => true
         active    = true,
     }
-    gd.activeRaidID = raidID
+    gd.activeSessionID = sessionID
 
     -- Snapshot current members
     self:AutoPopulateRoster()
-    local raid = gd.raids[raidID]
+    local session = gd.sessions[sessionID]
     for i = 1, GetNumGroupMembers() do
         local name = GetRaidRosterInfo(i)
-        if name then raid.members[self:GetFullName(name)] = true end
+        if name then session.members[self:GetFullName(name)] = true end
     end
 
-    self:Print("Raid created: " .. raidName)
-    self:BroadcastRaidCreate(raidID)
+    self:Print("Session created: " .. raidName)
+    self:BroadcastSessionCreate(sessionID)
     self:RefreshMainWindow()
 end
 
 ---------------------------------------------------------------------------
--- End / close a raid
+-- End / close a session
 ---------------------------------------------------------------------------
-function PP:EndRaid()
-    local raid, id = self:GetActiveRaid()
-    if not raid then return end
+function PP:EndSession()
+    local session, id = self:GetActiveSession()
+    if not session then return end
 
-    raid.active  = false
-    raid.endTime = time()
-    self:GetGuildData(self:GetActiveGuildKey()).activeRaidID = nil
+    session.active  = false
+    session.endTime = time()
+    self:GetGuildData(self:GetActiveGuildKey()).activeSessionID = nil
 
     -- Clear any pending loot
     wipe(self.pendingLoot)
     self:CloseLootPopups()
 
-    self:Print("Raid ended: " .. (raid.name or id))
-    self:BroadcastRaidClose(id)
+    self:Print("Session ended: " .. (session.name or id))
+    self:BroadcastSessionClose(id)
     self:RefreshMainWindow()
     self:RefreshLootMasterWindow()
 end
 
 ---------------------------------------------------------------------------
--- Boss tracking inside a raid
+-- Boss tracking inside a session
 ---------------------------------------------------------------------------
 function PP:AddBossToRaid(encounterID, encounterName)
-    local raid = self:GetActiveRaid()
+    local raid = self:GetActiveSession()
     if not raid then return end
     raid.bosses[#raid.bosses + 1] = {
         encounterID   = encounterID,
@@ -87,52 +87,53 @@ function PP:AddBossToRaid(encounterID, encounterName)
 end
 
 ---------------------------------------------------------------------------
--- Item tracking inside a raid
+-- Item tracking inside a session
 ---------------------------------------------------------------------------
-function PP:RecordItemAward(itemLink, itemID, awardedTo, pointsSpent, response)
-    local raid = self:GetActiveRaid()
-    if not raid then return end
-    raid.items[#raid.items + 1] = {
+function PP:RecordItemAward(itemLink, itemID, awardedTo, pointsSpent, response, lootKey)
+    local session = self:GetActiveSession()
+    if not session then return end
+    session.items[#session.items + 1] = {
         itemLink    = itemLink,
         itemID      = itemID,
         awardedTo   = awardedTo,
         pointsSpent = pointsSpent or 0,
         response    = response or PP.RESPONSE.NEED,
         time        = time(),
+        key         = lootKey,  -- loot key for LOOT_STATE_QUERY matching
     }
 end
 
 ---------------------------------------------------------------------------
--- Delete a raid record permanently (officer only)
+-- Delete a session record permanently (officer only)
 ---------------------------------------------------------------------------
 function PP:DeleteRaid(raidID)
     if not self:IsOfficerOrHigher() then
-        self:Print("Only guild officers can delete raids.")
+        self:Print("Only guild officers can delete sessions.")
         return
     end
 
     local gk = self:GetActiveGuildKey()
     local gd = self:GetGuildData(gk)
-    if not gd or not gd.raids[raidID] then
-        self:Print("Raid not found.")
+    if not gd or not gd.sessions[raidID] then
+        self:Print("Session not found.")
         return
     end
 
-    -- If this is the active raid, clear it first
-    if gd.activeRaidID == raidID then
-        gd.activeRaidID = nil
+    -- If this is the active session, clear it first
+    if gd.activeSessionID == raidID then
+        gd.activeSessionID = nil
         wipe(self.pendingLoot)
         self:CloseLootPopups()
     end
 
-    gd.raids[raidID] = nil
+    gd.sessions[raidID] = nil
     self:BumpRosterVersion(gk)  -- version bump so peers accept the delete
 
     -- Write tombstone so full-syncs propagate the deletion to offline peers
-    if not gd.deletedRaids then gd.deletedRaids = {} end
-    gd.deletedRaids[raidID] = gd.rosterVersion
+    if not gd.deletedSessions then gd.deletedSessions = {} end
+    gd.deletedSessions[raidID] = gd.rosterVersion
 
-    self:BroadcastRaidDelete(raidID, gk, gd.rosterVersion)
+    self:BroadcastSessionDelete(raidID, gk, gd.rosterVersion)
 
     -- Close the detail window if it was showing this raid
     if self._raidDetailWindow then
@@ -142,14 +143,14 @@ function PP:DeleteRaid(raidID)
 
     self:RefreshMainWindow()
     self:RefreshLootMasterWindow()
-    self:Print("Raid deleted.")
+    self:Print("Session deleted.")
 end
 
 ---------------------------------------------------------------------------
--- Check if the original raid leader is still present
+-- Check if the original session leader is still present
 ---------------------------------------------------------------------------
-function PP:CheckRaidLeaderPresent()
-    local raid, id = self:GetActiveRaid()
+function PP:CheckSessionLeaderPresent()
+    local raid, id = self:GetActiveSession()
     if not raid then return end
 
     -- If a continuation prompt is already pending, don't fire again
@@ -180,23 +181,23 @@ function PP:CheckRaidLeaderPresent()
 
     local me = self:GetPlayerFullName()
     if newLeader and newLeader == me then
-        -- Show the continuation prompt to the new raid leader
+        -- Show the continuation prompt to the new session leader
         self._pendingContinueRaidID = id
         StaticPopup_Show("PP_CONTINUE_RAID")
     elseif not newLeader then
-        -- No raid leader at all; end the raid immediately
-        self:EndRaid()
-        self:Print("Raid ended – the raid leader left the group.")
+        -- No raid leader at all; end the session immediately
+        self:EndSession()
+        self:Print("Session ended – the session leader left the group.")
     end
     -- If someone else is the new leader, their client handles the prompt
 end
 
 ---------------------------------------------------------------------------
--- Raid history helpers
+-- Session history helpers
 ---------------------------------------------------------------------------
 function PP:GetRaidHistory()
     local list = {}
-    for id, raid in pairs(self:GetGuildRaids()) do
+    for id, raid in pairs(self:GetGuildSessions()) do
         list[#list + 1] = {
             id        = id,
             name      = raid.name,
