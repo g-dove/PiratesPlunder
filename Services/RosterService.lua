@@ -11,6 +11,10 @@ PP.Roster = PP.Roster or {}
 -- Moved from PP:AddToRoster() in Roster.lua.
 ---------------------------------------------------------------------------
 function PP.Roster:Add(fullName)
+    if not PP:CanModify() then
+        PP:Print("Insufficient Permissions.")
+        return
+    end
     fullName = PP:GetFullName(fullName)
     local roster = PP.Repo.Roster:GetRoster()
     if roster[fullName] then
@@ -32,6 +36,10 @@ end
 -- Moved from PP:RemoveFromRoster() in Roster.lua.
 ---------------------------------------------------------------------------
 function PP.Roster:Remove(fullName)
+    if not PP:CanModify() then
+        PP:Print("Insufficient Permissions.")
+        return
+    end
     fullName = PP:GetFullName(fullName)
     PP.Repo.Roster:GetRoster()[fullName] = nil
     PP.Repo.Roster:BumpRosterVersion()

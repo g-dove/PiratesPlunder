@@ -34,7 +34,6 @@ function PP.Session:End(reason, sessionID, guildKey)
     PP.Repo.Roster:ClearActiveSessionID(guildKey)
     PP.Repo.Loot:WipeAll()
     PP:CloseLootPopups()
-    PP.Repo.Loot:Save()
 
     -- Reason-specific messaging
     if reason == PP.SESSION_END.OFFICER_ACTION then

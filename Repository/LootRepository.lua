@@ -24,6 +24,7 @@ end
 
 function PP.Repo.Loot:WipeAll()
     wipe(PP.pendingLoot)
+    PP.Repo.Loot:Save()
 end
 
 function PP.Repo.Loot:GetAll()
@@ -64,11 +65,12 @@ function PP.Repo.Loot:Save()
     for key, entry in pairs(PP.pendingLoot) do
         if not entry.awarded then
             PP.db.global.pendingLootCache[key] = {
-                itemLink  = entry.itemLink,
-                itemID    = entry.itemID,
-                postedBy  = entry.postedBy,
-                responses = entry.responses or {},
-                votes     = entry.votes or {},
+                itemLink      = entry.itemLink,
+                itemID        = entry.itemID,
+                postedBy      = entry.postedBy,
+                responses     = entry.responses or {},
+                votes         = entry.votes or {},
+                allowTransmog = entry.allowTransmog ~= false,
             }
         end
     end
@@ -88,14 +90,15 @@ function PP.Repo.Loot:Restore()
     if not cache then return end
     for key, saved in pairs(cache) do
         PP.pendingLoot[key] = {
-            itemLink  = saved.itemLink,
-            itemID    = saved.itemID,
-            postedBy  = saved.postedBy,
-            postedAt  = GetTime(),
-            responses = saved.responses or {},
-            votes     = saved.votes or {},
-            awarded   = false,
-            awardedTo = nil,
+            itemLink      = saved.itemLink,
+            itemID        = saved.itemID,
+            postedBy      = saved.postedBy,
+            postedAt      = GetTime(),
+            responses     = saved.responses or {},
+            votes         = saved.votes or {},
+            awarded       = false,
+            awardedTo     = nil,
+            allowTransmog = saved.allowTransmog ~= false,
         }
     end
     -- Show the unified response popup for any items we haven't responded to yet

@@ -427,7 +427,7 @@ function PP:HandleLootAward(data, sender)
     if not data or not data.key then return end
     -- Record item in raid history for all clients
     if data.itemLink and data.awardedTo then
-        PP.Session:RecordItemAward(data.itemLink, data.itemID, data.awardedTo, data.pointsSpent, data.response)
+        PP.Session:RecordItemAward(data.itemLink, data.itemID, data.awardedTo, data.pointsSpent, data.response, data.key)
     end
     -- Apply score deduction to the winner
     if data.awardedTo then

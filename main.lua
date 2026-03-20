@@ -10,6 +10,7 @@ local PiratesPlunder = LibStub("AceAddon-3.0"):NewAddon("PiratesPlunder",
 
 NS.addon = PiratesPlunder
 _G.PiratesPlunder = PiratesPlunder -- global for module files
+local PP = PiratesPlunder          -- local alias used throughout this file
 
 -- Library references
 PiratesPlunder.AceGUI = LibStub("AceGUI-3.0")
@@ -18,7 +19,7 @@ PiratesPlunder.AceGUI = LibStub("AceGUI-3.0")
 -- Constants
 ---------------------------------------------------------------------------
 PiratesPlunder.COMM_PREFIX = "PPLNDR"
-PiratesPlunder.VERSION     = C_AddOns.GetAddOnMetadata(addonName, "Version") or "0.0.0"
+PiratesPlunder.VERSION     = C_AddOns.GetAddOnMetadata(addonName, "Version") or "Unable to find version info."
 
 -- Comm message types
 PiratesPlunder.MSG = {
@@ -555,8 +556,7 @@ function PiratesPlunder:CheckActiveRaid()
     end
     -- Clear stale pending loot when there is no active session
     if not PP.Repo.Roster:HasActiveSession() and next(self.pendingLoot) ~= nil then
-        wipe(self.pendingLoot)
-        PP.Repo.Loot:Save()
+        PP.Repo.Loot:WipeAll()
         self:RefreshLootResponseFrame()
         self:RefreshLootMasterWindow()
     end
