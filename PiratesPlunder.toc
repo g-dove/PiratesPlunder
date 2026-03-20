@@ -18,12 +18,20 @@
 embeds.xml
 
 main.lua
+Repository\GuildRepository.lua
+Repository\LootRepository.lua
+Services\SessionService.lua
+Services\RosterService.lua
+Services\LootService.lua
 Modules\Roster.lua
 Modules\Raid.lua
 Modules\Loot.lua
 Modules\AwardedLoot.lua
 Modules\Sync.lua
 Modules\Trade.lua
+Commands\RosterCommands.lua
+Commands\SessionCommands.lua
+Commands\DevCommands.lua
 UI\MainWindow.lua
 UI\VersionCheckWindow.lua
 UI\LootWindow.lua

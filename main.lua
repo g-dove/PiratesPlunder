@@ -81,12 +81,12 @@ function PiratesPlunder:OnInitialize()
     if not self.db.global.migrated_v2 then
         local migrateKey = GetGuildInfo("player") or "__unguilded__"
         if self.db.global.roster and next(self.db.global.roster) ~= nil then
-            local gd = self:GetGuildData(migrateKey)
+            local gd = PP.Repo.Guild:GetData(migrateKey)
             for k, v in pairs(self.db.global.roster) do gd.roster[k] = v end
             gd.rosterVersion = self.db.global.rosterVersion or 0
         end
         if self.db.global.raids and next(self.db.global.raids) ~= nil then
-            local gd = self:GetGuildData(migrateKey)
+            local gd = PP.Repo.Guild:GetData(migrateKey)
             for id, raid in pairs(self.db.global.raids) do
                 gd.raids[id] = raid
                 if raid.active then gd.activeRaidID = id end
@@ -157,6 +157,10 @@ function PiratesPlunder:OnInitialize()
     self._sandbox         = false -- sandbox mode: simulates raid leader, no DB writes
     self._sandboxData     = nil  -- in-memory guild data block used while sandbox active
 
+    -- Command group dispatch table (populated by Commands/*.lua at file-load time)
+    -- Do not wipe; handlers are already registered before OnInitialize fires.
+    self._commandGroups = self._commandGroups or {}
+
     self:Print("Pirates Plunder v" .. self.VERSION .. " loaded. Type /pp to open.")
 end
 
@@ -200,7 +204,7 @@ function PiratesPlunder:OnEnable()
     self:CheckActiveRaid()
 
     -- Restore pending loot saved across reloads
-    self:RestorePendingLoot()
+    PP.Repo.Loot:Restore()
 
     -- Hook alt+right-click on items to auto-post to loot window
     self:InstallAltRightClickHook()
@@ -211,75 +215,11 @@ end
 ---------------------------------------------------------------------------
 function PiratesPlunder:SlashCommand(input)
     input = input and input:trim() or ""
-    if input == "" then
-        self:ToggleMainWindow()
-    elseif input == "help" then
-        self:Print("/pp – Toggle main window")
-        self:Print("/pp loot (or /pp l) – Toggle loot-master window")
-        self:Print("/pp response (or /pp r) – Toggle loot response frame")
-        self:Print("/pp version (or /pp v) – Check addon versions across the raid")
-        self:Print("/pp sandbox (or /pp s) – Toggle sandbox mode")
-        self:Print("/pp sandbox mod (or /pp s m) – Toggle canModify override in sandbox")
-        self:Print("/pp status – Show officer detection info")
-        self:Print("/pp bagdebug – Diagnose alt+right-click bag hook")
-    elseif input == "loot" or input == "l" then
-        self:SlashCommandLoot()
-    elseif input == "response" or input == "r" then
-        self:SlashCommandResponse()
-    elseif input == "version" or input == "v" then
-        self:ShowVersionCheckWindow()
-    elseif input == "sandbox" or input == "s" then
-        if self:IsSandbox() then
-            self:DisableSandbox()
-        else
-            self:EnableSandbox()
-        end
-    elseif input == "sandbox mod" or input == "s m" then
-        if not self:IsSandbox() then
-            self:EnableSandbox()
-        end
-        self._sandboxModOverride = not self._sandboxModOverride
-        if self._sandboxModOverride then
-            self:Print("|cFFFFD100[Sandbox] CanModify override: ON — acting as officer.|r")
-        else
-            self:Print("|cFF888888[Sandbox] CanModify override: OFF — acting as non-officer.|r")
-        end
-        self:RefreshMainWindow()
-    elseif input:match("^setrank%s+(%d+)$") then
-        local n = tonumber(input:match("^setrank%s+(%d+)$"))
-        self.db.global.officerRankThreshold = n
-        self._isOfficer = nil  -- force re-detect
-        self:RefreshOfficerStatus()
-        self:Print("Officer rank threshold set to " .. n .. ". Status: " .. (self._isOfficer and "|cFF00FF00Officer|r" or "|cFFFF4400Not officer|r"))
-        self:RefreshMainWindow()
-    elseif input == "bagdebug" then
-        self:Print("GameTooltip shown: " .. tostring(GameTooltip:IsShown()))
-        local _, tipLink = GameTooltip:GetItem()
-        self:Print("Tooltip item link: " .. tostring(tipLink))
-        self:Print("IsMouseButtonDown RightButton: " .. tostring(IsMouseButtonDown("RightButton")))
-    elseif input == "status" then
-        self._isOfficer = nil  -- force re-detect
-        self:RefreshOfficerStatus()
-        local inGuild   = IsInGuild() and "yes" or "no"
-        local myGuild   = self:GetPlayerGuild() or "none"
-        local activeKey = self:GetActiveGuildKey()
-        local officer   = self._isOfficer and "|cFF00FF00yes|r" or "|cFFFF4400no|r"
-        local canMod    = self:CanModify()   and "|cFF00FF00yes|r" or "|cFFFF4400no|r"
-        local apiUsed
-        if C_GuildInfo.IsGuildOfficer then
-            apiUsed = "C_GuildInfo.IsGuildOfficer()"
-        elseif CanUseGuildOfficerChat then
-            apiUsed = "CanUseGuildOfficerChat()"
-        elseif GuildControlGetRankFlags then
-            apiUsed = "GuildControlGetRankFlags (flag 13)"
-        else
-            apiUsed = "rank index threshold (" .. (self.db.global.officerRankThreshold or 1) .. ")"
-        end
-        self:Print("Guild: " .. inGuild .. " (" .. myGuild .. ")  Active roster: " .. activeKey)
-        self:Print("Officer: " .. officer .. "  Can modify: " .. canMod .. "  API: " .. apiUsed)
-    else
-        self:Print("Unknown command. Type /pp help for usage.")
+    if input == "" then self:ToggleMainWindow(); return end
+    for _, handler in ipairs(self._commandGroups) do
+        if handler(input) then return end
     end
+    self:Print("Unknown command. Type /pp help for usage.")
 end
 
 function PiratesPlunder:SlashCommandLoot()
@@ -353,25 +293,6 @@ function PiratesPlunder:GetActiveGuildKey()
     return self._activeGuildKey or self:GetPlayerGuild() or nil
 end
 
--- Ensures a per-guild data block exists and returns it.
-function PiratesPlunder:GetGuildData(guildKey)
-    -- Sandbox: route the sandbox key to the transient in-memory table
-    if self._sandbox and guildKey == "__sandbox__" then
-        return self._sandboxData
-    end
-    if not guildKey then return nil end
-    if not self.db.global.guilds[guildKey] then
-        self.db.global.guilds[guildKey] = {
-            roster          = {},
-            rosterVersion   = 0,
-            sessions        = {},
-            activeSessionID = nil,
-            deletedSessions = {},  -- [sessionID] = rosterVersion; tombstones for deleted sessions
-        }
-    end
-    return self.db.global.guilds[guildKey]
-end
-
 ---------------------------------------------------------------------------
 -- Roster display-name helpers
 ---------------------------------------------------------------------------
@@ -394,7 +315,7 @@ function PiratesPlunder:CreateCustomRoster(name)
     local trimmed = name and name:trim() or ""
     if trimmed == "" then return end
     local key = "__custom__:" .. trimmed
-    self:GetGuildData(key)     -- creates db entry if missing
+    PP.Repo.Guild:GetData(key)     -- creates db entry if missing
     self._activeGuildKey = key
     self:RefreshMainWindow()
 end
@@ -512,20 +433,6 @@ function PiratesPlunder:DisableSandbox()
     self:Print("|cFF888888[Sandbox] Disabled.|r")
 end
 
-function PiratesPlunder:GetRoster(guildKey)
-    local gd = self:GetGuildData(guildKey or self:GetActiveGuildKey())
-    return gd and gd.roster or {}
-end
-
-function PiratesPlunder:GetGuildSessions(guildKey)
-    local gd = self:GetGuildData(guildKey or self:GetActiveGuildKey())
-    return gd and gd.sessions or {}
-end
-
-function PiratesPlunder:BumpRosterVersion(guildKey)
-    local gd = self:GetGuildData(guildKey or self:GetActiveGuildKey())
-    if gd then gd.rosterVersion = gd.rosterVersion + 1 end
-end
 -- 1st: C_GuildInfo.IsGuildOfficer() – canonical Blizzard API.
 -- 2nd: CanUseGuildOfficerChat() – older API fallback.
 -- 3rd: GuildControlGetRankFlags flag 13 (Speak in Officer Chat).
@@ -625,7 +532,7 @@ end
 -- Officers of the active guild and the raid leader/assist qualify.
 function PiratesPlunder:CanViewLootMaster()
     if self._sandbox then return self._sandboxModOverride ~= false end
-    if not self:HasActiveSession() then return false end
+    if not PP.Repo.Guild:HasActiveSession() then return false end
     return self:CanPostLoot() or self:IsOfficerOrHigher()
 end
 
@@ -634,7 +541,7 @@ end
 -- Guild rosters: officer or raid-leader/assist.
 function PiratesPlunder:CanPostLoot()
     if self._sandbox then return self._sandboxModOverride ~= false end
-    if not self:HasActiveSession() then return false end
+    if not PP.Repo.Guild:HasActiveSession() then return false end
     local activeKey = self:GetActiveGuildKey()
     if activeKey and self:IsCustomRoster(activeKey) then
         return self:IsRaidLeader()
@@ -642,37 +549,14 @@ function PiratesPlunder:CanPostLoot()
     return self:CanModify() or self:IsRaidLeaderOrAssist()
 end
 
-function PiratesPlunder:HasActiveSession()
-    -- In sandbox, the fake session is always active
-    if self._sandbox then
-        return self._sandboxData ~= nil
-            and self._sandboxData.sessions["sandbox_raid"] ~= nil
-    end
-    local gd = self:GetGuildData(self:GetActiveGuildKey())
-    if not gd then return false end
-    local id = gd.activeSessionID
-    if id and gd.sessions[id] then
-        return gd.sessions[id].active == true
-    end
-    return false
-end
-
-function PiratesPlunder:GetActiveSession()
-    local gd = self:GetGuildData(self:GetActiveGuildKey())
-    if not gd then return nil, nil end
-    local id = gd.activeSessionID
-    if id then return gd.sessions[id], id end
-    return nil, nil
-end
-
 function PiratesPlunder:CheckActiveRaid()
-    if self:HasActiveSession() and not IsInGroup() then
-        self:EndSession()
+    if PP.Repo.Guild:HasActiveSession() and not IsInGroup() then
+        PP.Session:End(PP.SESSION_END.STARTUP_CHECK)
     end
     -- Clear stale pending loot when there is no active session
-    if not self:HasActiveSession() and next(self.pendingLoot) ~= nil then
+    if not PP.Repo.Guild:HasActiveSession() and next(self.pendingLoot) ~= nil then
         wipe(self.pendingLoot)
-        self:SavePendingLoot()
+        PP.Repo.Loot:Save()
         self:RefreshLootResponseFrame()
         self:RefreshLootMasterWindow()
     end
@@ -685,63 +569,6 @@ local _lootKeyIndex = 0
 function PiratesPlunder:LootKey(itemLink)
     _lootKeyIndex = _lootKeyIndex + 1
     return tostring(itemLink) .. ":" .. tostring(GetTime()) .. ":" .. _lootKeyIndex
-end
-
----------------------------------------------------------------------------
--- Persist / restore pending loot across reloads
----------------------------------------------------------------------------
-function PiratesPlunder:SavePendingLoot()
-    -- Store in DB so it survives /reload; skip entirely in sandbox mode
-    if not self.db then return end
-    if self._sandbox then return end
-    self.db.global.pendingLootCache = {}
-    for key, entry in pairs(self.pendingLoot) do
-        if not entry.awarded then
-            self.db.global.pendingLootCache[key] = {
-                itemLink  = entry.itemLink,
-                itemID    = entry.itemID,
-                postedBy  = entry.postedBy,
-                responses = entry.responses or {},
-                votes     = entry.votes or {},
-            }
-        end
-    end
-end
-
-function PiratesPlunder:RestorePendingLoot()
-    -- Don't restore stale loot if there is no active session
-    if not self:HasActiveSession() then
-        self.db.global.pendingLootCache = {}
-        return
-    end
-    local cache = self.db and self.db.global.pendingLootCache
-    if not cache then return end
-    for key, saved in pairs(cache) do
-        self.pendingLoot[key] = {
-            itemLink  = saved.itemLink,
-            itemID    = saved.itemID,
-            postedBy  = saved.postedBy,
-            postedAt  = GetTime(),
-            responses = saved.responses or {},
-            votes     = saved.votes or {},
-            awarded   = false,
-            awardedTo = nil,
-        }
-    end
-    -- Show the unified response popup for any items we haven't responded to yet
-    self:ScheduleTimer(function()
-        local me = self:GetPlayerFullName()
-        local hasUnresponded = false
-        for key, entry in pairs(self.pendingLoot) do
-            if not entry.responses[me] then
-                hasUnresponded = true
-                break
-            end
-        end
-        if hasUnresponded then
-            self:ShowLootResponseFrame()
-        end
-    end, 2) -- short delay so UI is fully loaded
 end
 
 ---------------------------------------------------------------------------
@@ -768,7 +595,7 @@ function PiratesPlunder:InstallAltRightClickHook()
 end
 
 function PiratesPlunder:AltRightClickPost(itemLink)
-    if not self:HasActiveSession() then
+    if not PP.Repo.Guild:HasActiveSession() then
         self:Print("No active session – cannot post loot.")
         return
     end
@@ -811,9 +638,9 @@ function PiratesPlunder:OnGroupRosterUpdate()
         end
     end
 
-    if self:HasActiveSession() and IsInRaid() then
-        self:AutoPopulateRoster()
-        self:CheckSessionLeaderPresent()
+    if PP.Repo.Guild:HasActiveSession() and IsInRaid() then
+        PP.Roster:AutoPopulate()
+        PP.Session:CheckLeaderPresent()
         -- Push the leader's autoPassEpicRolls setting to anyone who just joined
         if self:IsRaidLeader() then
             self:BroadcastRaidSettings()
@@ -823,18 +650,18 @@ function PiratesPlunder:OnGroupRosterUpdate()
 end
 
 function PiratesPlunder:OnEncounterEnd(_, encounterID, encounterName, difficultyID, groupSize, success)
-    if success == 1 and self:HasActiveSession() and IsInRaid() then
+    if success == 1 and PP.Repo.Guild:HasActiveSession() and IsInRaid() then
         self:OnBossKill(encounterID, encounterName)
     end
 end
 
 function PiratesPlunder:OnGroupLeft()
-    if self:HasActiveSession() then
+    if PP.Repo.Guild:HasActiveSession() then
         -- Leaving a raid group may be a zone transition, not a true group leave.
         -- Defer the session end for 70 seconds; OnPlayerEnteringWorld will cancel
         -- it if the player is still in the group after loading.
         if IsInRaid() then
-            local _, id = self:GetActiveSession()
+            local _, id = PP.Repo.Guild:GetActiveSession()
             local activeGuildKey = self:GetActiveGuildKey()
             self.db.global.pendingSessionEnd = { sessionID = id, guildKey = activeGuildKey }
             self._pendingSessionEndTimer = self:ScheduleTimer(function()
@@ -858,7 +685,7 @@ function PiratesPlunder:OnGroupLeft()
     self._activeGuildKey = self:GetPlayerGuild() or nil
 end
 
--- Extracted teardown: clears activeSessionID, marks session ended, wipes pending loot.
+-- Extracted teardown: delegates to PP.Session:End with LEFT_GROUP reason.
 -- Called by timer callback, OnPlayerEnteringWorld (not in group), OnGroupLeft (party case).
 function PiratesPlunder:CompletePendingSessionEnd()
     -- Cancel any running timer
@@ -868,22 +695,8 @@ function PiratesPlunder:CompletePendingSessionEnd()
     end
     self.db.global.pendingSessionEnd = nil
 
-    if self:HasActiveSession() then
-        local session, id = self:GetActiveSession()
-        local me = self:GetPlayerFullName()
-        local gd = self:GetGuildData(self:GetActiveGuildKey())
-        if gd then
-            gd.activeSessionID = nil
-            if id and gd.sessions and gd.sessions[id] then
-                gd.sessions[id].active  = false
-                gd.sessions[id].endTime = gd.sessions[id].endTime or time()
-            end
-        end
-        wipe(self.pendingLoot)
-        self:CloseLootPopups()
-        if session and session.leader == me then
-            self:Print("You left the group. The active session has been closed on your end.")
-        end
+    if PP.Repo.Guild:HasActiveSession() then
+        PP.Session:End(PP.SESSION_END.LEFT_GROUP)
         self:RefreshMainWindow()
         self:RefreshLootMasterWindow()
     end
@@ -895,7 +708,7 @@ end
 -- Called after zone transitions when we may have missed an AWARD or CANCEL.
 function PiratesPlunder:RequestLootStateSync()
     if not IsInGroup() then return end
-    if not self:HasActiveSession() then return end
+    if not PP.Repo.Guild:HasActiveSession() then return end
     local keys = {}
     for k in pairs(self.pendingLoot) do
         keys[#keys + 1] = k
@@ -918,8 +731,8 @@ end
 function PiratesPlunder:OnStartLootRoll(_, rollID)
     if not self.db.global.autoPassEpicRolls then return end
     -- Only auto-pass when there is an active addon-managed session
-    if not self:HasActiveSession() then return end
-    -- Leaders and officers roll normally       
+    if not PP.Repo.Guild:HasActiveSession() then return end
+    -- Leaders and officers roll normally
     if self:IsRaidLeader() then return end
     local _, _, _, quality = GetLootRollItemInfo(rollID)
     if quality and quality >= 4 then  -- 4 = Epic, 5 = Legendary, …

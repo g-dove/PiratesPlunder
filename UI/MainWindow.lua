@@ -116,7 +116,7 @@ function PP:DrawRosterTab(container)
         dd:SetLabel("Active Roster")
         dd:SetWidth(220)
         local ddItems = {}
-        for gk in pairs(self.db.global.guilds) do
+        for _, gk in ipairs(PP.Repo.Guild:GetAllGuildKeys()) do
             ddItems[gk] = PP:GetRosterDisplayName(gk)
         end
         dd:SetList(ddItems)
@@ -152,7 +152,7 @@ function PP:DrawRosterTab(container)
         addBox:SetWidth(200)
         addBox:SetCallback("OnEnterPressed", function(widget, _, text)
             if text and text:trim() ~= "" then
-                PP:AddToRoster(text:trim())
+                PP.Roster:Add(text:trim())
                 widget:SetText("")
             end
         end)
@@ -191,7 +191,7 @@ function PP:DrawRosterTab(container)
         local sel      = PP._selectedRosterPlayer
         local selEntry = nil
         if sel then
-            for _, e in ipairs(self:GetSortedRoster()) do
+            for _, e in ipairs(PP.Roster:GetSorted()) do
                 if e.fullName == sel then selEntry = e; break end
             end
         end
@@ -225,7 +225,7 @@ function PP:DrawRosterTab(container)
             if not selEntry then return end
             local val = tonumber(text)
             if val then
-                PP:SetPlayerScore(sel, val)
+                PP.Roster:SetScore(sel, val)
             else
                 widget:SetText(tostring(selEntry.score))
             end
@@ -237,7 +237,7 @@ function PP:DrawRosterTab(container)
         minusBtn:SetWidth(50)
         minusBtn:SetDisabled(not hasSelection)
         minusBtn:SetCallback("OnClick", function()
-            if selEntry then PP:SetPlayerScore(sel, math.max(0, selEntry.score - 1)) end
+            if selEntry then PP.Roster:SetScore(sel, math.max(0, selEntry.score - 1)) end
         end)
         selRow:AddChild(minusBtn)
 
@@ -246,7 +246,7 @@ function PP:DrawRosterTab(container)
         plusBtn:SetWidth(50)
         plusBtn:SetDisabled(not hasSelection)
         plusBtn:SetCallback("OnClick", function()
-            if selEntry then PP:SetPlayerScore(sel, selEntry.score + 1) end
+            if selEntry then PP.Roster:SetScore(sel, selEntry.score + 1) end
         end)
         selRow:AddChild(plusBtn)
 
@@ -305,7 +305,7 @@ function PP:DrawRosterTab(container)
                 PP:Print("Enter a valid number.")
                 return
             end
-            PP:AddScoreToRaidMembers(amt)
+            PP.Roster:AddScoreToRaidMembers(amt)
         end)
         groupRow:AddChild(applyBtn)
 
@@ -317,7 +317,7 @@ function PP:DrawRosterTab(container)
                 PP:Print("You must be in a group.")
                 return
             end
-            PP:AddScoreToRaidMembers(1)
+            PP.Roster:AddScoreToRaidMembers(1)
         end)
         groupRow:AddChild(plusOneBtn)
 
@@ -368,8 +368,8 @@ function PP:DrawRosterTab(container)
     end
 
     -- Player rows
-    local sorted  = self:GetSortedRoster()
-    local raidSet = self:GetRaidMemberSet()
+    local sorted  = PP.Roster:GetSorted()
+    local raidSet = PP.Roster:GetRaidMemberSet()
 
     local padTop = AceGUI:Create("Label")
     padTop:SetFullWidth(true)
@@ -510,7 +510,7 @@ function PP:DrawSessionsTab(container)
         dd:SetLabel("Active Roster")
         dd:SetWidth(220)
         local ddItems = {}
-        for gk in pairs(self.db.global.guilds) do
+        for _, gk in ipairs(PP.Repo.Guild:GetAllGuildKeys()) do
             ddItems[gk] = PP:GetRosterDisplayName(gk)
         end
         dd:SetList(ddItems)
@@ -536,12 +536,12 @@ function PP:DrawSessionsTab(container)
         topGroup:AddChild(nameBox)
         self._raidNameBox = nameBox
 
-        if self:HasActiveSession() then
+        if PP.Repo.Guild:HasActiveSession() then
             local closeBtn = AceGUI:Create("Button")
             closeBtn:SetText("Close Session")
             closeBtn:SetWidth(120)
             closeBtn:SetCallback("OnClick", function()
-                PP:EndSession()
+                PP.Session:End(PP.SESSION_END.OFFICER_ACTION)
             end)
             topGroup:AddChild(closeBtn)
         else
@@ -550,15 +550,15 @@ function PP:DrawSessionsTab(container)
             createBtn:SetWidth(120)
             createBtn:SetCallback("OnClick", function()
                 local raidName = nameBox:GetText()
-                PP:CreateSession(raidName)
+                PP.Session:Create(raidName)
             end)
             topGroup:AddChild(createBtn)
         end
     end
 
     -- Active session indicator
-    if self:HasActiveSession() then
-        local session = self:GetActiveSession()
+    if PP.Repo.Guild:HasActiveSession() then
+        local session = PP.Repo.Guild:GetActiveSession()
         local activeLabel = AceGUI:Create("Label")
         activeLabel:SetFullWidth(true)
         activeLabel:SetText("|cFF00FF00Active Session:|r " .. (session and session.name or "Unknown"))
@@ -609,8 +609,9 @@ end
 function PP:ShowRaidDetail(raidID)
     -- Search all guild data blocks since the session may belong to any guild
     local raid
-    for _, gd in pairs(self.db.global.guilds) do
-        if gd.sessions and gd.sessions[raidID] then
+    for _, gk in ipairs(PP.Repo.Guild:GetAllGuildKeys()) do
+        local gd = PP.Repo.Guild:GetData(gk)
+        if gd and gd.sessions and gd.sessions[raidID] then
             raid = gd.sessions[raidID]
             break
         end
@@ -787,7 +788,7 @@ function PP:DrawSettingsTab(container)
 
     -- Collect only custom (non-guild) roster keys
     local customKeys = {}
-    for gk in pairs(PP.db.global.guilds) do
+    for _, gk in ipairs(PP.Repo.Guild:GetAllGuildKeys()) do
         if PP:IsCustomRoster(gk) then
             customKeys[#customKeys + 1] = gk
         end
@@ -866,7 +867,7 @@ function PP:DrawSettingsTab(container)
 
     -- Collect guild (non-custom, non-sandbox) roster keys
     local guildKeys = {}
-    for gk in pairs(PP.db.global.guilds) do
+    for _, gk in ipairs(PP.Repo.Guild:GetAllGuildKeys()) do
         if not PP:IsCustomRoster(gk) and gk ~= "__sandbox__" then
             guildKeys[#guildKeys + 1] = gk
         end
@@ -963,7 +964,7 @@ function PP:DrawSettingsTab(container)
     local myGuild   = PP:GetPlayerGuild() or "|cFFAAAAAAnone|r"
     local officer   = PP:IsOfficerOrHigher() and "|cFF00FF00Yes|r" or "|cFFFF4400No|r"
     local canMod    = PP:CanModify()          and "|cFF00FF00Yes|r" or "|cFFFF4400No|r"
-    local gd        = PP:GetGuildData(guildKey)
+    local gd        = PP.Repo.Guild:GetData(guildKey)
     local rVer      = gd and gd.rosterVersion or 0
     local inGroup   = IsInGroup()             and "|cFF00FF00Yes|r" or "|cFFAAAAAA No|r"
 
@@ -1012,7 +1013,7 @@ StaticPopupDialogs["PP_CONFIRM_REMOVE_PLAYER"] = {
     OnAccept = function()
         if PP._pendingRemovePlayer then
             PP._selectedRosterPlayer = nil
-            PP:RemoveFromRoster(PP._pendingRemovePlayer)
+            PP.Roster:Remove(PP._pendingRemovePlayer)
             PP._pendingRemovePlayer = nil
         end
     end,
@@ -1029,7 +1030,7 @@ StaticPopupDialogs["PP_CONFIRM_RANDOMIZE"] = {
     button1 = "Randomize",
     button2 = "Cancel",
     OnAccept = function()
-        PP:RandomizeRosterOrder()
+        PP.Roster:Randomize()
     end,
     timeout = 0,
     whileDead = true,
@@ -1041,7 +1042,7 @@ StaticPopupDialogs["PP_CONFIRM_CLEAR_ROSTER"] = {
     button1 = "Yes",
     button2 = "No",
     OnAccept = function()
-        PP:ClearRoster()
+        PP.Roster:Clear()
     end,
     timeout = 0,
     whileDead = true,
@@ -1121,7 +1122,7 @@ StaticPopupDialogs["PP_CONTINUE_RAID"] = {
         local id = PP._pendingContinueRaidID
         if id then
             local gk = PP:GetActiveGuildKey()
-            local gd = PP:GetGuildData(gk)
+            local gd = PP.Repo.Guild:GetData(gk)
             if gd and gd.sessions and gd.sessions[id] then
                 gd.sessions[id].leader = PP:GetPlayerFullName()
                 PP:Print("You are now leading the session: " .. (gd.sessions[id].name or id))
@@ -1131,7 +1132,7 @@ StaticPopupDialogs["PP_CONTINUE_RAID"] = {
     end,
     OnCancel = function()
         PP._pendingContinueRaidID = nil
-        PP:EndSession()
+        PP.Session:End(PP.SESSION_END.OFFICER_ACTION)
         PP:Print("Session ended.")
     end,
     timeout = 0,
@@ -1145,7 +1146,7 @@ StaticPopupDialogs["PP_CONFIRM_DELETE_RAID"] = {
     button2 = "Cancel",
     OnAccept = function()
         if PP._pendingDeleteRaidID then
-            PP:DeleteRaid(PP._pendingDeleteRaidID)
+            PP.Session:Delete(PP._pendingDeleteRaidID)
             PP._pendingDeleteRaidID = nil
         end
     end,
