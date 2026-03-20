@@ -7,6 +7,52 @@ local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 PP.Loot = PP.Loot or {}
 
 ---------------------------------------------------------------------------
+-- Restore() – public entry point for post-load loot recovery.
+-- Called from OnPlayerEnteringWorld for both reload and zone-transition
+-- paths. Conditionally restores from DB (skipped if pendingLoot already
+-- has items, e.g. during a zone transition where loot was never wiped),
+-- then verifies state against the loot master.
+---------------------------------------------------------------------------
+function PP.Loot:Restore()
+    -- Only pull from DB cache when pendingLoot is empty (fresh reload/login).
+    -- Zone transitions leave pendingLoot intact, so we skip the DB restore.
+    if next(PP.Repo.Loot:GetAll()) == nil then
+        PP.Repo.Loot:Restore()
+    end
+    -- Verify whatever is now in pendingLoot (from DB or from memory)
+    if next(PP.Repo.Loot:GetAll()) ~= nil then
+        self:_requestStateSync()
+    end
+end
+
+---------------------------------------------------------------------------
+-- _requestStateSync() – internal. Broadcasts LOOT_STATE_QUERY and sets a
+-- 10-second fallback to show the response popup if no reply arrives.
+---------------------------------------------------------------------------
+function PP.Loot:_requestStateSync()
+    if not IsInGroup() then
+        PP:ShowLootResponseFrameIfNeeded()
+        return
+    end
+    if not PP.Repo.Roster:HasActiveSession() then return end
+    local keys = {}
+    for k in pairs(PP.Repo.Loot:GetAll()) do
+        keys[#keys + 1] = k
+    end
+    if #keys == 0 then return end
+
+    PP:SendAddonMessage(PP.MSG.LOOT_STATE_QUERY, { keys = keys })
+
+    PP._lootStateVerifyPending = true
+    PP:ScheduleTimer(function()
+        if PP._lootStateVerifyPending then
+            PP._lootStateVerifyPending = false
+            PP:ShowLootResponseFrameIfNeeded()
+        end
+    end, 10)
+end
+
+---------------------------------------------------------------------------
 -- Post(itemLink)
 -- Moved from PP:PostLoot() in Loot.lua.
 ---------------------------------------------------------------------------

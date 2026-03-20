@@ -482,9 +482,9 @@ function PP:HandleLootUpdate(data)
 end
 
 -- Loot state query: sent by a client re-entering world to resolve stale pending items.
--- Only the raid leader replies.
+-- Any player who can post loot (officer, raid leader/assist) may reply.
 function PP:HandleLootStateQuery(sender, data)
-    if not self:IsRaidLeader() then return end
+    if not self:CanPostLoot() then return end
     if not data or not data.keys then return end
 
     local results = {}
@@ -520,11 +520,13 @@ end
 -- Loot state reply: resolve stale pending loot entries on the querying client.
 function PP:HandleLootStateReply(data)
     if not data or not data.results then return end
+    -- Cancel the fallback timer set by _requestStateSync()
+    PP._lootStateVerifyPending = false
+
     local changed = false
     for key, result in pairs(data.results) do
         if result.status == "awarded" or result.status == "unknown" then
             if PP.Repo.Loot:GetEntry(key) then
-                -- Close popup if any
                 if self.lootPopups[key] then
                     self.lootPopups[key]:Hide()
                     self.lootPopups[key] = nil
@@ -540,6 +542,8 @@ function PP:HandleLootStateReply(data)
         self:RefreshLootResponseFrame()
         self:RefreshLootMasterWindow()
     end
+    -- Show popup for any items still pending that we haven't responded to
+    self:ShowLootResponseFrameIfNeeded()
 end
 
 -- Loot posting cancelled

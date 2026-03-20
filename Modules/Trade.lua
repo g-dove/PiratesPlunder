@@ -99,6 +99,7 @@ function PP:RemovePendingTrade(itemID, awardedTo)
         local p = self.pendingTrades[i]
         if p.itemID == itemID and p.awardedTo == awardedTo then
             table.remove(self.pendingTrades, i)
+            PP.Repo.Loot:Save()
             return
         end
     end

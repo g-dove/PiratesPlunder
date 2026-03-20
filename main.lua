@@ -60,6 +60,8 @@ local defaults = {
         guilds = {},
         -- Transient cache for pending loot across reloads
         pendingLootCache = {},
+        -- Transient cache for pending trades across reloads
+        pendingTradesCache = {},
         -- Fallback officer rank threshold (used if GuildControlGetRankFlags unavailable)
         officerRankThreshold = 1,
         -- Migration flag: set true once legacy flat data has been moved into guilds
@@ -203,9 +205,6 @@ function PiratesPlunder:OnEnable()
     end
 
     self:CheckActiveRaid()
-
-    -- Restore pending loot saved across reloads
-    PP.Repo.Loot:Restore()
 
     -- Hook alt+right-click on items to auto-post to loot window
     self:InstallAltRightClickHook()
@@ -425,8 +424,9 @@ function PiratesPlunder:DisableSandbox()
     self._sandboxData = nil
     self._sandboxModOverride = nil
     -- Discard any loot state accumulated during the sandbox session
-    wipe(self.pendingLoot)
+    PP.Repo.Loot:WipeAll()
     wipe(self.pendingTrades)
+    self.db.global.pendingTradesCache = {}
     wipe(self.lootQueue)
     if self.lootMasterWindow then self:RefreshLootMasterWindow() end
     self:RefreshLootResponseFrame()
@@ -555,7 +555,7 @@ function PiratesPlunder:CheckActiveRaid()
         PP.Session:End(PP.SESSION_END.STARTUP_CHECK)
     end
     -- Clear stale pending loot when there is no active session
-    if not PP.Repo.Roster:HasActiveSession() and next(self.pendingLoot) ~= nil then
+    if not PP.Repo.Roster:HasActiveSession() and next(PP.Repo.Loot:GetAll()) ~= nil then
         PP.Repo.Loot:WipeAll()
         self:RefreshLootResponseFrame()
         self:RefreshLootMasterWindow()
@@ -704,17 +704,15 @@ function PiratesPlunder:CompletePendingSessionEnd()
     self._activeGuildKey = self:GetPlayerGuild() or nil
 end
 
--- Send a LOOT_STATE_QUERY to the raid leader for all pending loot keys.
--- Called after zone transitions when we may have missed an AWARD or CANCEL.
-function PiratesPlunder:RequestLootStateSync()
-    if not IsInGroup() then return end
-    if not PP.Repo.Roster:HasActiveSession() then return end
-    local keys = {}
-    for k in pairs(self.pendingLoot) do
-        keys[#keys + 1] = k
+-- Show the response popup only if there are unresponded items.
+function PiratesPlunder:ShowLootResponseFrameIfNeeded()
+    local me = self:GetPlayerFullName()
+    for _, entry in pairs(PP.Repo.Loot:GetAll()) do
+        if not entry.responses[me] then
+            self:ShowLootResponseFrame()
+            return
+        end
     end
-    if #keys == 0 then return end
-    self:SendAddonMessage(self.MSG.LOOT_STATE_QUERY, { keys = keys })
 end
 
 function PiratesPlunder:OnGuildRosterUpdate()
@@ -749,12 +747,14 @@ function PiratesPlunder:ResetAddon()
     -- Wipe all per-guild saved data for this machine
     wipe(self.db.global.guilds)
     self.db.global.pendingLootCache = {}
+    self.db.global.pendingTradesCache = {}
     self.db.global.pendingSessionEnd = nil
     self.db.global.migrated_v2 = true       -- don't re-run migration on empty data
     self.db.global.migrated_sessions = true -- ditto
-    -- Clear runtime state
+    -- Clear runtime state (skip Save() since DB was already wiped above)
     wipe(self.pendingLoot)
     wipe(self.pendingTrades)
+    PP:CloseLootPopups()
     if self._pendingSessionEndTimer then
         self:CancelTimer(self._pendingSessionEndTimer)
         self._pendingSessionEndTimer = nil
@@ -795,9 +795,7 @@ function PiratesPlunder:OnPlayerEnteringWorld(_, isInitialLogin, isReloadingUi)
                 self._pendingSessionEndTimer = nil
             end
             -- Sync loot state to resolve any items awarded during loading screen
-            if next(self.pendingLoot) ~= nil then
-                self:ScheduleTimer(function() self:RequestLootStateSync() end, 3)
-            end
+            self:ScheduleTimer(function() PP.Loot:Restore() end, 3)
         else
             -- Not in a group any more – complete the session end now
             self:CompletePendingSessionEnd()
@@ -814,5 +812,7 @@ function PiratesPlunder:OnPlayerEnteringWorld(_, isInitialLogin, isReloadingUi)
             -- Not guilded but in a group – sync immediately
             self:ScheduleTimer(function() self:RequestSync() end, 5)
         end
+        -- Restore cached loot and verify against loot master
+        self:ScheduleTimer(function() PP.Loot:Restore() end, 4)
     end
 end

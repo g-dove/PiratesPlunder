@@ -51,6 +51,7 @@ end
 
 function PP.Repo.Loot:RemovePendingTrade(idx)
     table.remove(PP.pendingTrades, idx)
+    PP.Repo.Loot:Save()
 end
 
 ---------------------------------------------------------------------------
@@ -74,6 +75,14 @@ function PP.Repo.Loot:Save()
             }
         end
     end
+    PP.db.global.pendingTradesCache = {}
+    for i, entry in ipairs(PP.pendingTrades) do
+        PP.db.global.pendingTradesCache[i] = {
+            itemLink  = entry.itemLink,
+            itemID    = entry.itemID,
+            awardedTo = entry.awardedTo,
+        }
+    end
 end
 
 ---------------------------------------------------------------------------
@@ -84,6 +93,7 @@ function PP.Repo.Loot:Restore()
     -- Don't restore stale loot if there is no active session
     if not PP.Repo.Roster:HasActiveSession() then
         PP.db.global.pendingLootCache = {}
+        PP.db.global.pendingTradesCache = {}
         return
     end
     local cache = PP.db and PP.db.global.pendingLootCache
@@ -101,18 +111,15 @@ function PP.Repo.Loot:Restore()
             allowTransmog = saved.allowTransmog ~= false,
         }
     end
-    -- Show the unified response popup for any items we haven't responded to yet
-    PP:ScheduleTimer(function()
-        local me = PP:GetPlayerFullName()
-        local hasUnresponded = false
-        for key, entry in pairs(PP.pendingLoot) do
-            if not entry.responses[me] then
-                hasUnresponded = true
-                break
-            end
+    -- Restore pending trades only on a true reload (empty table = not a zone transition)
+    local tradesCache = PP.db.global.pendingTradesCache
+    if tradesCache and #PP.pendingTrades == 0 then
+        for i, saved in ipairs(tradesCache) do
+            PP.pendingTrades[i] = {
+                itemLink  = saved.itemLink,
+                itemID    = saved.itemID,
+                awardedTo = saved.awardedTo,
+            }
         end
-        if hasUnresponded then
-            PP:ShowLootResponseFrame()
-        end
-    end, 2) -- short delay so UI is fully loaded
+    end
 end
