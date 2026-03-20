@@ -18,7 +18,7 @@
 embeds.xml
 
 main.lua
-Repository\GuildRepository.lua
+Repository\RosterRepository.lua
 Repository\LootRepository.lua
 Services\SessionService.lua
 Services\RosterService.lua

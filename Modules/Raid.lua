@@ -10,7 +10,7 @@ local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 ---------------------------------------------------------------------------
 function PP:GetRaidHistory()
     local list = {}
-    for id, raid in pairs(PP.Repo.Guild:GetSessions()) do
+    for id, raid in pairs(PP.Repo.Roster:GetSessions()) do
         list[#list + 1] = {
             id        = id,
             name      = raid.name,

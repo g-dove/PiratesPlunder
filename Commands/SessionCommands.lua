@@ -7,8 +7,8 @@ PP._commandGroups = PP._commandGroups or {}
 table.insert(PP._commandGroups, function(input)
     if input == "session" then
         -- Show status
-        if PP.Repo.Guild:HasActiveSession() then
-            local session, id = PP.Repo.Guild:GetActiveSession()
+        if PP.Repo.Roster:HasActiveSession() then
+            local session, id = PP.Repo.Roster:GetActiveSession()
             PP:Print("Active session: " .. (session and session.name or id))
         else
             PP:Print("No active session.")

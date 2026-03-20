@@ -120,7 +120,7 @@ end
 -- returns (that score - 1), floored at 0.
 ---------------------------------------------------------------------------
 function PP:GetMinorUpgradeScore(fullName)
-    local roster  = PP.Repo.Guild:GetRoster()
+    local roster  = PP.Repo.Roster:GetRoster()
     local myScore = roster[fullName] and roster[fullName].score or 0
     local best    = nil  -- highest score that is still < myScore
     for name, data in pairs(roster) do

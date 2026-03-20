@@ -11,7 +11,7 @@ PP.Loot = PP.Loot or {}
 -- Moved from PP:PostLoot() in Loot.lua.
 ---------------------------------------------------------------------------
 function PP.Loot:Post(itemLink)
-    if not PP.Repo.Guild:HasActiveSession() then
+    if not PP.Repo.Roster:HasActiveSession() then
         PP:Print("No active session.")
         return
     end
@@ -91,7 +91,7 @@ function PP.Loot:Award(key, fullName, free)
     local winnerResponse = winnerResp and winnerResp.response or PP.RESPONSE.NEED
     local pointsSpent, newScore = 0, 0
 
-    local roster = PP.Repo.Guild:GetRoster()
+    local roster = PP.Repo.Roster:GetRoster()
     if roster[fullName] then
         local currentScore = roster[fullName].score or 0
         if free then
@@ -110,10 +110,10 @@ function PP.Loot:Award(key, fullName, free)
             newScore    = 0
         end
         roster[fullName].score = newScore
-        PP.Repo.Guild:BumpRosterVersion()
+        PP.Repo.Roster:BumpRosterVersion()
         -- Broadcast updated roster so all clients reflect the new score
         local gk = PP:GetActiveGuildKey()
-        local gd = PP.Repo.Guild:GetData(gk)
+        local gd = PP.Repo.Roster:GetData(gk)
         PP:SendAddonMessage(PP.MSG.SCORE_UPDATE, {
             roster   = gd.roster,
             version  = gd.rosterVersion,
@@ -170,7 +170,7 @@ end
 function PP.Loot:SubmitResponse(key, response)
     local me = PP:GetPlayerFullName()
     local score = 0
-    local roster = PP.Repo.Guild:GetRoster()
+    local roster = PP.Repo.Roster:GetRoster()
     if roster[me] then
         score = roster[me].score
     end

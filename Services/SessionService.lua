@@ -26,25 +26,25 @@ PP.SESSION_END = {
 ---------------------------------------------------------------------------
 function PP.Session:End(reason, sessionID, guildKey)
     guildKey  = guildKey  or PP:GetActiveGuildKey()
-    local gd  = PP.Repo.Guild:GetData(guildKey)
+    local gd  = PP.Repo.Roster:GetData(guildKey)
     sessionID = sessionID or (gd and gd.activeSessionID)
     if not sessionID then return end
 
-    PP.Repo.Guild:MarkSessionEnded(guildKey, sessionID, time(), reason)
-    PP.Repo.Guild:ClearActiveSessionID(guildKey)
+    PP.Repo.Roster:MarkSessionEnded(guildKey, sessionID, time(), reason)
+    PP.Repo.Roster:ClearActiveSessionID(guildKey)
     PP.Repo.Loot:WipeAll()
     PP:CloseLootPopups()
     PP.Repo.Loot:Save()
 
     -- Reason-specific messaging
     if reason == PP.SESSION_END.OFFICER_ACTION then
-        local gd2 = PP.Repo.Guild:GetData(guildKey)
+        local gd2 = PP.Repo.Roster:GetData(guildKey)
         local session = gd2 and gd2.sessions and gd2.sessions[sessionID]
         PP:Print("Session ended: " .. (session and session.name or sessionID))
         PP:BroadcastSessionClose(sessionID)
     elseif reason == PP.SESSION_END.LEFT_GROUP then
         local me = PP:GetPlayerFullName()
-        local gd2 = PP.Repo.Guild:GetData(guildKey)
+        local gd2 = PP.Repo.Roster:GetData(guildKey)
         local session = gd2 and gd2.sessions and gd2.sessions[sessionID]
         if session and session.leader == me then
             PP:Print("You left the group. The active session has been closed on your end.")
@@ -77,7 +77,7 @@ function PP.Session:Create(raidName)
         PP:Print("Only officers can create a session.")
         return
     end
-    if PP.Repo.Guild:HasActiveSession() then
+    if PP.Repo.Roster:HasActiveSession() then
         PP:Print("A session is already active. Close it before creating a new one.")
         return
     end
@@ -89,7 +89,7 @@ function PP.Session:Create(raidName)
     local sessionID = tostring(time()) .. "-" .. math.random(1000, 9999)
     local leader    = PP:GetPlayerFullName()
     local gk        = PP:GetActiveGuildKey()
-    local gd        = PP.Repo.Guild:GetData(gk)
+    local gd        = PP.Repo.Roster:GetData(gk)
     raidName        = raidName or ("Session " .. date("%Y-%m-%d %H:%M"))
 
     gd.sessions[sessionID] = {
@@ -103,7 +103,7 @@ function PP.Session:Create(raidName)
         members   = {},   -- fullName => true
         active    = true,
     }
-    PP.Repo.Guild:SetActiveSessionID(gk, sessionID)
+    PP.Repo.Roster:SetActiveSessionID(gk, sessionID)
 
     -- Snapshot current members
     PP.Roster:AutoPopulate()
@@ -129,7 +129,7 @@ function PP.Session:Delete(raidID)
     end
 
     local gk = PP:GetActiveGuildKey()
-    local gd = PP.Repo.Guild:GetData(gk)
+    local gd = PP.Repo.Roster:GetData(gk)
     if not gd or not gd.sessions[raidID] then
         PP:Print("Session not found.")
         return
@@ -137,18 +137,18 @@ function PP.Session:Delete(raidID)
 
     -- If this is the active session, clear it first
     if gd.activeSessionID == raidID then
-        PP.Repo.Guild:ClearActiveSessionID(gk)
+        PP.Repo.Roster:ClearActiveSessionID(gk)
         PP.Repo.Loot:WipeAll()
         PP:CloseLootPopups()
     end
 
     gd.sessions[raidID] = nil
-    PP.Repo.Guild:BumpRosterVersion(gk)  -- version bump so peers accept the delete
+    PP.Repo.Roster:BumpRosterVersion(gk)  -- version bump so peers accept the delete
 
     -- Write tombstone so full-syncs propagate the deletion to offline peers
-    PP.Repo.Guild:AddTombstone(gk, raidID, PP.Repo.Guild:GetRosterVersion(gk))
+    PP.Repo.Roster:AddTombstone(gk, raidID, PP.Repo.Roster:GetRosterVersion(gk))
 
-    PP:BroadcastSessionDelete(raidID, gk, PP.Repo.Guild:GetRosterVersion(gk))
+    PP:BroadcastSessionDelete(raidID, gk, PP.Repo.Roster:GetRosterVersion(gk))
 
     -- Close the detail window if it was showing this raid
     if PP._raidDetailWindow then
@@ -166,7 +166,7 @@ end
 -- Moved from PP:CheckSessionLeaderPresent() in Raid.lua.
 ---------------------------------------------------------------------------
 function PP.Session:CheckLeaderPresent()
-    local raid, id = PP.Repo.Guild:GetActiveSession()
+    local raid, id = PP.Repo.Roster:GetActiveSession()
     if not raid then return end
 
     -- If a continuation prompt is already pending, don't fire again
@@ -210,7 +210,7 @@ end
 -- Moved from PP:AddBossToRaid() in Raid.lua.
 ---------------------------------------------------------------------------
 function PP.Session:AddBoss(encounterID, encounterName)
-    local raid = PP.Repo.Guild:GetActiveSession()
+    local raid = PP.Repo.Roster:GetActiveSession()
     if not raid then return end
     raid.bosses[#raid.bosses + 1] = {
         encounterID   = encounterID,
@@ -224,7 +224,7 @@ end
 -- Moved from PP:RecordItemAward() in Raid.lua.
 ---------------------------------------------------------------------------
 function PP.Session:RecordItemAward(itemLink, itemID, awardedTo, pointsSpent, response, lootKey)
-    local session = PP.Repo.Guild:GetActiveSession()
+    local session = PP.Repo.Roster:GetActiveSession()
     if not session then return end
     session.items[#session.items + 1] = {
         itemLink    = itemLink,

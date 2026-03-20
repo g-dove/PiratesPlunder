@@ -81,12 +81,12 @@ function PiratesPlunder:OnInitialize()
     if not self.db.global.migrated_v2 then
         local migrateKey = GetGuildInfo("player") or "__unguilded__"
         if self.db.global.roster and next(self.db.global.roster) ~= nil then
-            local gd = PP.Repo.Guild:GetData(migrateKey)
+            local gd = PP.Repo.Roster:GetData(migrateKey)
             for k, v in pairs(self.db.global.roster) do gd.roster[k] = v end
             gd.rosterVersion = self.db.global.rosterVersion or 0
         end
         if self.db.global.raids and next(self.db.global.raids) ~= nil then
-            local gd = PP.Repo.Guild:GetData(migrateKey)
+            local gd = PP.Repo.Roster:GetData(migrateKey)
             for id, raid in pairs(self.db.global.raids) do
                 gd.raids[id] = raid
                 if raid.active then gd.activeRaidID = id end
@@ -315,7 +315,7 @@ function PiratesPlunder:CreateCustomRoster(name)
     local trimmed = name and name:trim() or ""
     if trimmed == "" then return end
     local key = "__custom__:" .. trimmed
-    PP.Repo.Guild:GetData(key)     -- creates db entry if missing
+    PP.Repo.Roster:GetData(key)     -- creates db entry if missing
     self._activeGuildKey = key
     self:RefreshMainWindow()
 end
@@ -532,7 +532,7 @@ end
 -- Officers of the active guild and the raid leader/assist qualify.
 function PiratesPlunder:CanViewLootMaster()
     if self._sandbox then return self._sandboxModOverride ~= false end
-    if not PP.Repo.Guild:HasActiveSession() then return false end
+    if not PP.Repo.Roster:HasActiveSession() then return false end
     return self:CanPostLoot() or self:IsOfficerOrHigher()
 end
 
@@ -541,7 +541,7 @@ end
 -- Guild rosters: officer or raid-leader/assist.
 function PiratesPlunder:CanPostLoot()
     if self._sandbox then return self._sandboxModOverride ~= false end
-    if not PP.Repo.Guild:HasActiveSession() then return false end
+    if not PP.Repo.Roster:HasActiveSession() then return false end
     local activeKey = self:GetActiveGuildKey()
     if activeKey and self:IsCustomRoster(activeKey) then
         return self:IsRaidLeader()
@@ -550,11 +550,11 @@ function PiratesPlunder:CanPostLoot()
 end
 
 function PiratesPlunder:CheckActiveRaid()
-    if PP.Repo.Guild:HasActiveSession() and not IsInGroup() then
+    if PP.Repo.Roster:HasActiveSession() and not IsInGroup() then
         PP.Session:End(PP.SESSION_END.STARTUP_CHECK)
     end
     -- Clear stale pending loot when there is no active session
-    if not PP.Repo.Guild:HasActiveSession() and next(self.pendingLoot) ~= nil then
+    if not PP.Repo.Roster:HasActiveSession() and next(self.pendingLoot) ~= nil then
         wipe(self.pendingLoot)
         PP.Repo.Loot:Save()
         self:RefreshLootResponseFrame()
@@ -595,7 +595,7 @@ function PiratesPlunder:InstallAltRightClickHook()
 end
 
 function PiratesPlunder:AltRightClickPost(itemLink)
-    if not PP.Repo.Guild:HasActiveSession() then
+    if not PP.Repo.Roster:HasActiveSession() then
         self:Print("No active session – cannot post loot.")
         return
     end
@@ -638,7 +638,7 @@ function PiratesPlunder:OnGroupRosterUpdate()
         end
     end
 
-    if PP.Repo.Guild:HasActiveSession() and IsInRaid() then
+    if PP.Repo.Roster:HasActiveSession() and IsInRaid() then
         PP.Roster:AutoPopulate()
         PP.Session:CheckLeaderPresent()
         -- Push the leader's autoPassEpicRolls setting to anyone who just joined
@@ -650,18 +650,18 @@ function PiratesPlunder:OnGroupRosterUpdate()
 end
 
 function PiratesPlunder:OnEncounterEnd(_, encounterID, encounterName, difficultyID, groupSize, success)
-    if success == 1 and PP.Repo.Guild:HasActiveSession() and IsInRaid() then
+    if success == 1 and PP.Repo.Roster:HasActiveSession() and IsInRaid() then
         self:OnBossKill(encounterID, encounterName)
     end
 end
 
 function PiratesPlunder:OnGroupLeft()
-    if PP.Repo.Guild:HasActiveSession() then
+    if PP.Repo.Roster:HasActiveSession() then
         -- Leaving a raid group may be a zone transition, not a true group leave.
         -- Defer the session end for 70 seconds; OnPlayerEnteringWorld will cancel
         -- it if the player is still in the group after loading.
         if IsInRaid() then
-            local _, id = PP.Repo.Guild:GetActiveSession()
+            local _, id = PP.Repo.Roster:GetActiveSession()
             local activeGuildKey = self:GetActiveGuildKey()
             self.db.global.pendingSessionEnd = { sessionID = id, guildKey = activeGuildKey }
             self._pendingSessionEndTimer = self:ScheduleTimer(function()
@@ -695,7 +695,7 @@ function PiratesPlunder:CompletePendingSessionEnd()
     end
     self.db.global.pendingSessionEnd = nil
 
-    if PP.Repo.Guild:HasActiveSession() then
+    if PP.Repo.Roster:HasActiveSession() then
         PP.Session:End(PP.SESSION_END.LEFT_GROUP)
         self:RefreshMainWindow()
         self:RefreshLootMasterWindow()
@@ -708,7 +708,7 @@ end
 -- Called after zone transitions when we may have missed an AWARD or CANCEL.
 function PiratesPlunder:RequestLootStateSync()
     if not IsInGroup() then return end
-    if not PP.Repo.Guild:HasActiveSession() then return end
+    if not PP.Repo.Roster:HasActiveSession() then return end
     local keys = {}
     for k in pairs(self.pendingLoot) do
         keys[#keys + 1] = k
@@ -731,7 +731,7 @@ end
 function PiratesPlunder:OnStartLootRoll(_, rollID)
     if not self.db.global.autoPassEpicRolls then return end
     -- Only auto-pass when there is an active addon-managed session
-    if not PP.Repo.Guild:HasActiveSession() then return end
+    if not PP.Repo.Roster:HasActiveSession() then return end
     -- Leaders and officers roll normally
     if self:IsRaidLeader() then return end
     local _, _, _, quality = GetLootRollItemInfo(rollID)

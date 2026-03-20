@@ -12,7 +12,7 @@ PP.Roster = PP.Roster or {}
 ---------------------------------------------------------------------------
 function PP.Roster:Add(fullName)
     fullName = PP:GetFullName(fullName)
-    local roster = PP.Repo.Guild:GetRoster()
+    local roster = PP.Repo.Roster:GetRoster()
     if roster[fullName] then
         PP:Print(PP:GetShortName(fullName) .. " is already in the roster.")
         return
@@ -22,7 +22,7 @@ function PP.Roster:Add(fullName)
         realm = fullName:match("-(.+)$") or "",
         score = 0,
     }
-    PP.Repo.Guild:BumpRosterVersion()
+    PP.Repo.Roster:BumpRosterVersion()
     PP:BroadcastRoster()
     PP:RefreshMainWindow()
 end
@@ -33,8 +33,8 @@ end
 ---------------------------------------------------------------------------
 function PP.Roster:Remove(fullName)
     fullName = PP:GetFullName(fullName)
-    PP.Repo.Guild:GetRoster()[fullName] = nil
-    PP.Repo.Guild:BumpRosterVersion()
+    PP.Repo.Roster:GetRoster()[fullName] = nil
+    PP.Repo.Roster:BumpRosterVersion()
     PP:BroadcastRoster()
     PP:RefreshMainWindow()
 end
@@ -49,14 +49,14 @@ function PP.Roster:SetScore(fullName, newScore)
         return
     end
     fullName = PP:GetFullName(fullName)
-    local roster = PP.Repo.Guild:GetRoster()
+    local roster = PP.Repo.Roster:GetRoster()
     if not roster[fullName] then
         PP:Print("Player not found in roster.")
         return
     end
     newScore = tonumber(newScore) or 0
     roster[fullName].score = newScore
-    PP.Repo.Guild:BumpRosterVersion()
+    PP.Repo.Roster:BumpRosterVersion()
     PP:BroadcastRoster()
     PP:RefreshMainWindow()
     PP:Print(PP:GetShortName(fullName) .. " score set to " .. newScore)
@@ -72,7 +72,7 @@ function PP.Roster:Randomize()
         return
     end
 
-    local roster = PP.Repo.Guild:GetRoster()
+    local roster = PP.Repo.Roster:GetRoster()
     local names = {}
     for fullName in pairs(roster) do
         names[#names + 1] = fullName
@@ -89,7 +89,7 @@ function PP.Roster:Randomize()
         roster[fullName].score = #names - idx + 1
     end
 
-    PP.Repo.Guild:BumpRosterVersion()
+    PP.Repo.Roster:BumpRosterVersion()
     PP:Print("Roster order randomized!")
     PP:BroadcastRoster()
     PP:RefreshMainWindow()
@@ -104,8 +104,8 @@ function PP.Roster:Clear()
         PP:Print("Only officers can clear the roster.")
         return
     end
-    wipe(PP.Repo.Guild:GetRoster())
-    PP.Repo.Guild:BumpRosterVersion()
+    wipe(PP.Repo.Roster:GetRoster())
+    PP.Repo.Roster:BumpRosterVersion()
     PP:Print("Roster cleared.")
     PP:BroadcastRoster()
     PP:RefreshMainWindow()
@@ -124,7 +124,7 @@ function PP.Roster:AutoPopulate()
         local name, realm = UnitName(unit)
         if name and name ~= UNKNOWNOBJECT and name ~= "" then
             local fullName = PP:GetFullName(name .. (realm and realm ~= "" and ("-" .. realm) or ""))
-            local roster = PP.Repo.Guild:GetRoster()
+            local roster = PP.Repo.Roster:GetRoster()
             if not roster[fullName] then
                 local shortName = PP:GetShortName(fullName)
                 local realmPart = fullName:match("-(.+)$") or ""
@@ -145,7 +145,7 @@ end
 function PP.Roster:AddScoreToRaidMembers(amount)
     amount = amount or 1
     if not IsInRaid() then return end
-    local roster = PP.Repo.Guild:GetRoster()
+    local roster = PP.Repo.Roster:GetRoster()
     local count = GetNumGroupMembers()
     for i = 1, count do
         local name = GetRaidRosterInfo(i)
@@ -156,7 +156,7 @@ function PP.Roster:AddScoreToRaidMembers(amount)
             end
         end
     end
-    PP.Repo.Guild:BumpRosterVersion()
+    PP.Repo.Roster:BumpRosterVersion()
     PP:BroadcastRoster()
     PP:RefreshMainWindow()
 end
@@ -167,7 +167,7 @@ end
 ---------------------------------------------------------------------------
 function PP.Roster:GetSorted()
     local list = {}
-    for fullName, data in pairs(PP.Repo.Guild:GetRoster()) do
+    for fullName, data in pairs(PP.Repo.Roster:GetRoster()) do
         list[#list + 1] = {
             fullName = fullName,
             name     = data.name,

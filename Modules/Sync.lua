@@ -133,7 +133,7 @@ end
 function PP:BroadcastRoster()
     if not IsInGroup() then return end
     local gk = self:GetActiveGuildKey()
-    local gd = PP.Repo.Guild:GetData(gk)
+    local gd = PP.Repo.Roster:GetData(gk)
     self:SendAddonMessage(PP.MSG.ROSTER_UPDATE, {
         roster   = gd.roster,
         version  = gd.rosterVersion,
@@ -144,7 +144,7 @@ end
 function PP:BroadcastSessionCreate(sessionID)
     if not IsInGroup() then return end
     local gk = self:GetActiveGuildKey()
-    local gd = PP.Repo.Guild:GetData(gk)
+    local gd = PP.Repo.Roster:GetData(gk)
     self:SendAddonMessage(PP.MSG.SESSION_CREATE, {
         raidID   = sessionID,
         raid     = gd.sessions[sessionID],
@@ -172,7 +172,7 @@ end
 function PP:RequestSync()
     if not IsInGroup() then return end
     local gk = self:GetActiveGuildKey()
-    local gd = PP.Repo.Guild:GetData(gk)
+    local gd = PP.Repo.Roster:GetData(gk)
     -- Count session award records we have so peers can detect a gap
     local raidItemCount = 0
     for _, session in pairs(gd.sessions or {}) do
@@ -207,7 +207,7 @@ function PP:HandleSyncRequest(sender, data)
     -- Only respond if the requester's guild matches ours
     local myGuild = self:GetPlayerGuild()
     if not myGuild or gk ~= myGuild then return end
-    local gd = PP.Repo.Guild:GetData(gk)
+    local gd = PP.Repo.Roster:GetData(gk)
     local requesterVersion   = data and data.rosterVersion   or -1
     local requesterRaidItems = data and data.raidItemCount   or -1
     -- Count our own awarded items across all sessions
@@ -237,7 +237,7 @@ function PP:HandleSyncFull(data, sender)
         if gk ~= myGuild and gk ~= activeKey and not self.db.global.guilds[gk] then
             -- (do nothing – ignore this guild's data entirely)
         else
-        local local_gd = PP.Repo.Guild:GetData(gk)
+        local local_gd = PP.Repo.Roster:GetData(gk)
         -- Roster: take higher version
         if incoming.rosterVersion and incoming.rosterVersion > local_gd.rosterVersion then
             local_gd.roster        = incoming.roster or local_gd.roster
@@ -311,7 +311,7 @@ end
 -- Roster update from an officer
 function PP:HandleRosterUpdate(data, sender)
     if not data or not data.guildKey then return end
-    local gd = PP.Repo.Guild:GetData(data.guildKey)
+    local gd = PP.Repo.Roster:GetData(data.guildKey)
     if not gd then return end
     if data.version and data.version > gd.rosterVersion then
         gd.roster        = data.roster or gd.roster
@@ -324,7 +324,7 @@ end
 function PP:HandleSessionCreate(data, sender)
     if not data or not data.raidID or not data.raid then return end
     local gk = data.guildKey or self:GetActiveGuildKey()
-    local gd = PP.Repo.Guild:GetData(gk)
+    local gd = PP.Repo.Roster:GetData(gk)
     gd.sessions[data.raidID] = data.raid
     gd.activeSessionID = data.raidID
     -- Adopt this guild key as active if we don't have one set
@@ -338,7 +338,7 @@ end
 -- Session deleted by an officer
 function PP:HandleSessionDelete(data, sender)
     if not data or not data.raidID or not data.guildKey then return end
-    local gd = PP.Repo.Guild:GetData(data.guildKey)
+    local gd = PP.Repo.Roster:GetData(data.guildKey)
     if not gd then return end
 
     -- Only apply if the incoming version is newer than ours (same guard as roster updates)
@@ -369,7 +369,7 @@ end
 function PP:HandleSessionClose(data, sender)
     if not data or not data.raidID then return end
     local gk = data.guildKey or self:GetActiveGuildKey()
-    local gd = PP.Repo.Guild:GetData(gk)
+    local gd = PP.Repo.Roster:GetData(gk)
     local session = gd.sessions[data.raidID]
     if session then
         session.active  = false
@@ -384,7 +384,7 @@ end
 -- Score update
 function PP:HandleScoreUpdate(data, sender)
     if not data or not data.guildKey then return end
-    local gd = PP.Repo.Guild:GetData(data.guildKey)
+    local gd = PP.Repo.Roster:GetData(data.guildKey)
     if not gd then return end
     if data.version and data.version > gd.rosterVersion then
         gd.roster        = data.roster or gd.roster
@@ -431,7 +431,7 @@ function PP:HandleLootAward(data, sender)
     end
     -- Apply score deduction to the winner
     if data.awardedTo then
-        local roster = PP.Repo.Guild:GetRoster()
+        local roster = PP.Repo.Roster:GetRoster()
         if roster[data.awardedTo] then
             if data.newScore ~= nil then
                 roster[data.awardedTo].score = data.newScore
@@ -493,7 +493,7 @@ function PP:HandleLootStateQuery(sender, data)
             results[key] = { status = "pending" }
         else
             -- Check session items for an awarded record matching this key
-            local session = PP.Repo.Guild:GetActiveSession()
+            local session = PP.Repo.Roster:GetActiveSession()
             local found = false
             if session and session.items then
                 for _, item in ipairs(session.items) do

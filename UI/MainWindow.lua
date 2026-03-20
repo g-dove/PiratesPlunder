@@ -116,7 +116,7 @@ function PP:DrawRosterTab(container)
         dd:SetLabel("Active Roster")
         dd:SetWidth(220)
         local ddItems = {}
-        for _, gk in ipairs(PP.Repo.Guild:GetAllGuildKeys()) do
+        for _, gk in ipairs(PP.Repo.Roster:GetAllGuildKeys()) do
             ddItems[gk] = PP:GetRosterDisplayName(gk)
         end
         dd:SetList(ddItems)
@@ -510,7 +510,7 @@ function PP:DrawSessionsTab(container)
         dd:SetLabel("Active Roster")
         dd:SetWidth(220)
         local ddItems = {}
-        for _, gk in ipairs(PP.Repo.Guild:GetAllGuildKeys()) do
+        for _, gk in ipairs(PP.Repo.Roster:GetAllGuildKeys()) do
             ddItems[gk] = PP:GetRosterDisplayName(gk)
         end
         dd:SetList(ddItems)
@@ -536,7 +536,7 @@ function PP:DrawSessionsTab(container)
         topGroup:AddChild(nameBox)
         self._raidNameBox = nameBox
 
-        if PP.Repo.Guild:HasActiveSession() then
+        if PP.Repo.Roster:HasActiveSession() then
             local closeBtn = AceGUI:Create("Button")
             closeBtn:SetText("Close Session")
             closeBtn:SetWidth(120)
@@ -557,8 +557,8 @@ function PP:DrawSessionsTab(container)
     end
 
     -- Active session indicator
-    if PP.Repo.Guild:HasActiveSession() then
-        local session = PP.Repo.Guild:GetActiveSession()
+    if PP.Repo.Roster:HasActiveSession() then
+        local session = PP.Repo.Roster:GetActiveSession()
         local activeLabel = AceGUI:Create("Label")
         activeLabel:SetFullWidth(true)
         activeLabel:SetText("|cFF00FF00Active Session:|r " .. (session and session.name or "Unknown"))
@@ -609,8 +609,8 @@ end
 function PP:ShowRaidDetail(raidID)
     -- Search all guild data blocks since the session may belong to any guild
     local raid
-    for _, gk in ipairs(PP.Repo.Guild:GetAllGuildKeys()) do
-        local gd = PP.Repo.Guild:GetData(gk)
+    for _, gk in ipairs(PP.Repo.Roster:GetAllGuildKeys()) do
+        local gd = PP.Repo.Roster:GetData(gk)
         if gd and gd.sessions and gd.sessions[raidID] then
             raid = gd.sessions[raidID]
             break
@@ -788,7 +788,7 @@ function PP:DrawSettingsTab(container)
 
     -- Collect only custom (non-guild) roster keys
     local customKeys = {}
-    for _, gk in ipairs(PP.Repo.Guild:GetAllGuildKeys()) do
+    for _, gk in ipairs(PP.Repo.Roster:GetAllGuildKeys()) do
         if PP:IsCustomRoster(gk) then
             customKeys[#customKeys + 1] = gk
         end
@@ -867,7 +867,7 @@ function PP:DrawSettingsTab(container)
 
     -- Collect guild (non-custom, non-sandbox) roster keys
     local guildKeys = {}
-    for _, gk in ipairs(PP.Repo.Guild:GetAllGuildKeys()) do
+    for _, gk in ipairs(PP.Repo.Roster:GetAllGuildKeys()) do
         if not PP:IsCustomRoster(gk) and gk ~= "__sandbox__" then
             guildKeys[#guildKeys + 1] = gk
         end
@@ -964,7 +964,7 @@ function PP:DrawSettingsTab(container)
     local myGuild   = PP:GetPlayerGuild() or "|cFFAAAAAAnone|r"
     local officer   = PP:IsOfficerOrHigher() and "|cFF00FF00Yes|r" or "|cFFFF4400No|r"
     local canMod    = PP:CanModify()          and "|cFF00FF00Yes|r" or "|cFFFF4400No|r"
-    local gd        = PP.Repo.Guild:GetData(guildKey)
+    local gd        = PP.Repo.Roster:GetData(guildKey)
     local rVer      = gd and gd.rosterVersion or 0
     local inGroup   = IsInGroup()             and "|cFF00FF00Yes|r" or "|cFFAAAAAA No|r"
 
@@ -1122,7 +1122,7 @@ StaticPopupDialogs["PP_CONTINUE_RAID"] = {
         local id = PP._pendingContinueRaidID
         if id then
             local gk = PP:GetActiveGuildKey()
-            local gd = PP.Repo.Guild:GetData(gk)
+            local gd = PP.Repo.Roster:GetData(gk)
             if gd and gd.sessions and gd.sessions[id] then
                 gd.sessions[id].leader = PP:GetPlayerFullName()
                 PP:Print("You are now leading the session: " .. (gd.sessions[id].name or id))

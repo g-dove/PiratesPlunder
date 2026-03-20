@@ -80,7 +80,7 @@ end
 ---------------------------------------------------------------------------
 function PP.Repo.Loot:Restore()
     -- Don't restore stale loot if there is no active session
-    if not PP.Repo.Guild:HasActiveSession() then
+    if not PP.Repo.Roster:HasActiveSession() then
         PP.db.global.pendingLootCache = {}
         return
     end
