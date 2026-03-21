@@ -428,7 +428,6 @@ function PiratesPlunder:DisableSandbox()
     -- pendingLootCache in the DB is not overwritten.
     wipe(self.pendingLoot)
     wipe(self.pendingTrades)
-    self.db.global.pendingTradesCache = {}
     wipe(self.lootQueue)
     if self.lootMasterWindow then self:RefreshLootMasterWindow() end
     self:RefreshLootResponseFrame()
