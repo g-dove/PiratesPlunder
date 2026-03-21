@@ -12,6 +12,7 @@
 -- Public API:
 --   PP:GetPlayerAwardedLoot(fullName)  → list, newest-first
 ---------------------------------------------------------------------------
+---@type PPAddon
 local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 
 ---------------------------------------------------------------------------

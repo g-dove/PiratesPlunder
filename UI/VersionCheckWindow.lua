@@ -1,6 +1,7 @@
 ---------------------------------------------------------------------------
 -- Pirates Plunder – Version Check Window
 ---------------------------------------------------------------------------
+---@type PPAddon
 local PP    = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 local AceGUI = PP.AceGUI
 
@@ -51,9 +52,7 @@ function PP:ShowVersionCheckWindow()
     end)
     PP._versionCheckWindow = f
 
-    local frameName = "PPVersionCheckFrame"
-    _G[frameName] = f.frame
-    tinsert(UISpecialFrames, frameName)
+    PP:RegisterEscFrame(f, "PPVersionCheckFrame")
 
     local scroll = AceGUI:Create("ScrollFrame")
     scroll:SetFullWidth(true)

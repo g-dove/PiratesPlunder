@@ -3,6 +3,7 @@
 --   1) Loot-master window  (/pploot, /ppl)  – post items, view responses, award
 --   2) Unified multi-item response popup – Need / Transmog / Pass per item
 ---------------------------------------------------------------------------
+---@type PPAddon
 local PP  = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 local AceGUI = PP.AceGUI
 
@@ -42,9 +43,7 @@ function PP:CreateLootMasterWindow()
     self.lootMasterWindow = f
 
     -- Make ESC close this window
-    local frameName = "PPLootMasterFrame"
-    _G[frameName] = f.frame
-    tinsert(UISpecialFrames, frameName)
+    PP:RegisterEscFrame(f, "PPLootMasterFrame")
 
     local scroll = AceGUI:Create("ScrollFrame")
     scroll:SetFullWidth(true)
@@ -106,8 +105,9 @@ function PP:DrawLootMasterContent(container)
     end)
     inputGroup:AddChild(addBtn)
 
-    if #self.lootQueue > 0 then
-        for i, qEntry in ipairs(self.lootQueue) do
+    local lootQueue = PP.Repo.Loot:GetQueue()
+    if #lootQueue > 0 then
+        for i, qEntry in ipairs(lootQueue) do
             local qRow = AceGUI:Create("SimpleGroup")
             qRow:SetFullWidth(true)
             qRow:SetLayout("Flow")
@@ -130,10 +130,10 @@ function PP:DrawLootMasterContent(container)
         end
 
         local postAllBtn = AceGUI:Create("Button")
-        postAllBtn:SetText("Post All (" .. #self.lootQueue .. ")")
+        postAllBtn:SetText("Post All (" .. #lootQueue .. ")")
         postAllBtn:SetWidth(130)
         postAllBtn:SetCallback("OnClick", function()
-            PP:PostLootQueue()
+            PP.Loot:PostAll()
         end)
         container:AddChild(postAllBtn)
     else
@@ -348,7 +348,7 @@ function PP:DrawLootMasterContent(container)
                     awardBtn:SetText("Award")
                     awardBtn:SetWidth(70)
                     awardBtn:SetCallback("OnClick", function()
-                        PP:AwardItem(capturedKey, capturedName)
+                        PP.Loot:Award(capturedKey, capturedName)
                     end)
                     rRow:AddChild(awardBtn)
 
@@ -356,11 +356,11 @@ function PP:DrawLootMasterContent(container)
                     freeBtn:SetText("|cFF00FF00Free|r")
                     freeBtn:SetWidth(60)
                     freeBtn:SetCallback("OnClick", function()
-                        PP:AwardItem(capturedKey, capturedName, true)
+                        PP.Loot:Award(capturedKey, capturedName, true)
                     end)
                     rRow:AddChild(freeBtn)
 
-                    local lootEntry = PP.pendingLoot[item.key]
+                    local lootEntry = PP.Repo.Loot:GetEntry(item.key)
                     local myVote    = lootEntry and lootEntry.votes and lootEntry.votes[me]
                     local votedThis = myVote == resp.fullName
                     local voteBtn = AceGUI:Create("Button")
@@ -372,7 +372,7 @@ function PP:DrawLootMasterContent(container)
                     rRow:AddChild(voteBtn)
                 else
                     -- Observer (officer / RL who didn't post this item): one vote per item
-                    local lootEntry = PP.pendingLoot[item.key]
+                    local lootEntry = PP.Repo.Loot:GetEntry(item.key)
                     local myVote    = lootEntry and lootEntry.votes and lootEntry.votes[me]
                     local votedThis = myVote == resp.fullName
                     local voteBtn = AceGUI:Create("Button")
@@ -393,8 +393,8 @@ function PP:DrawLootMasterContent(container)
 
         -- Who in the raid hasn't responded yet (also works in sandbox)
         if IsInRaid() or PP:IsSandbox() then
-            local raidSet = self:GetRaidMemberSet()
-            local lootEntry = self.pendingLoot[item.key]
+            local raidSet = PP.Roster:GetRaidMemberSet()
+            local lootEntry = PP.Repo.Loot:GetEntry(item.key)
             local nonResponders = {}
             if lootEntry then
                 for fullName in pairs(raidSet) do
@@ -424,20 +424,21 @@ function PP:DrawLootMasterContent(container)
             cancelBtn:SetWidth(80)
             local capturedItemKey = item.key
             cancelBtn:SetCallback("OnClick", function()
-                PP:CancelLoot(capturedItemKey)
+                PP.Loot:Cancel(capturedItemKey)
             end)
             itemGroup:AddChild(cancelBtn)
         end
     end
 
     -- Pending trades section with clear buttons (poster's view only)
-    if canPost and #self.pendingTrades > 0 then
+    local pendingTrades = PP.Repo.Loot:GetPendingTrades()
+    if canPost and #pendingTrades > 0 then
         local tradeHead = AceGUI:Create("Heading")
         tradeHead:SetFullWidth(true)
         tradeHead:SetText("Pending Trades")
         container:AddChild(tradeHead)
 
-        for tIdx, trade in ipairs(self.pendingTrades) do
+        for tIdx, trade in ipairs(pendingTrades) do
             local tRow = AceGUI:Create("SimpleGroup")
             tRow:SetFullWidth(true)
             tRow:SetLayout("Flow")
@@ -456,7 +457,7 @@ function PP:DrawLootMasterContent(container)
             clearBtn:SetWidth(80)
             local capturedIdx = tIdx
             clearBtn:SetCallback("OnClick", function()
-                table.remove(PP.pendingTrades, capturedIdx)
+                PP.Repo.Loot:RemovePendingTrade(capturedIdx)
                 PP:RefreshLootMasterWindow()
             end)
             tRow:AddChild(clearBtn)
@@ -466,7 +467,8 @@ function PP:DrawLootMasterContent(container)
         clearAllBtn:SetText("Clear All Trades")
         clearAllBtn:SetWidth(140)
         clearAllBtn:SetCallback("OnClick", function()
-            wipe(PP.pendingTrades)
+            wipe(PP.Repo.Loot:GetPendingTrades())
+            PP.Repo.Loot:Save()
             PP:RefreshLootMasterWindow()
         end)
         container:AddChild(clearAllBtn)
@@ -595,7 +597,7 @@ function PP:RefreshLootResponseFrame()
     -- We check the individual entry flags (synced from the poster) rather than
     -- the local setting, which may differ from the raid leader's.
     local anyTmog = false
-    for _, entry in pairs(self.pendingLoot) do
+    for _, entry in pairs(PP.Repo.Loot:GetAll()) do
         if not entry.awarded and entry.allowTransmog ~= false then
             anyTmog = true
             break
@@ -606,7 +608,7 @@ function PP:RefreshLootResponseFrame()
     local frameWidth   = contentWidth + iconPad + 24   -- matching right margin
     f:SetWidth(frameWidth)
 
-    for key, entry in pairs(self.pendingLoot) do
+    for key, entry in pairs(PP.Repo.Loot:GetAll()) do
         if not entry.awarded then
             itemCount = itemCount + 1
             local myResponse = entry.responses[me] and entry.responses[me].response or nil
@@ -670,7 +672,7 @@ function PP:RefreshLootResponseFrame()
                 needBtn:GetFontString():SetTextColor(0, 1, 0)
             end
             needBtn:SetScript("OnClick", function()
-                PP:ExpressInterest(capturedKey, PP.RESPONSE.NEED)
+                PP.Loot:SubmitResponse(capturedKey, PP.RESPONSE.NEED)
             end)
 
             local minorBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
@@ -681,7 +683,7 @@ function PP:RefreshLootResponseFrame()
                 minorBtn:GetFontString():SetTextColor(0, 0.8, 1)
             end
             minorBtn:SetScript("OnClick", function()
-                PP:ExpressInterest(capturedKey, PP.RESPONSE.MINOR)
+                PP.Loot:SubmitResponse(capturedKey, PP.RESPONSE.MINOR)
             end)
 
             local showTmog = entry.allowTransmog ~= false
@@ -697,7 +699,7 @@ function PP:RefreshLootResponseFrame()
                 tmogBtn:Hide()
             end
             tmogBtn:SetScript("OnClick", function()
-                PP:ExpressInterest(capturedKey, PP.RESPONSE.TRANSMOG)
+                PP.Loot:SubmitResponse(capturedKey, PP.RESPONSE.TRANSMOG)
             end)
 
             local passBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
@@ -712,7 +714,7 @@ function PP:RefreshLootResponseFrame()
                 passBtn:GetFontString():SetTextColor(0.5, 0.5, 0.5)
             end
             passBtn:SetScript("OnClick", function()
-                PP:ExpressInterest(capturedKey, PP.RESPONSE.PASS)
+                PP.Loot:SubmitResponse(capturedKey, PP.RESPONSE.PASS)
             end)
 
             row:Show()
@@ -792,7 +794,7 @@ end
 function PP:ShowLootReopenButton()
     -- Only show if unawarded items are still pending
     local hasItems = false
-    for _, entry in pairs(self.pendingLoot) do
+    for _, entry in pairs(PP.Repo.Loot:GetAll()) do
         if not entry.awarded then hasItems = true; break end
     end
     if not hasItems then return end

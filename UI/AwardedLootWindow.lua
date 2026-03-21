@@ -12,6 +12,7 @@
 --   PP:HideAwardedLootWindow()
 --   PP:RefreshAwardedLootWindow()
 ---------------------------------------------------------------------------
+---@type PPAddon
 local PP     = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 local AceGUI = PP.AceGUI
 
@@ -55,9 +56,7 @@ function PP:ShowAwardedLootWindow(fullName)
     self.awardedLootWindow = f
 
     -- ESC closes this window
-    local frameName = "PPAwardedLootFrame"
-    _G[frameName] = f.frame
-    tinsert(UISpecialFrames, frameName)
+    PP:RegisterEscFrame(f, "PPAwardedLootFrame")
 
     local scroll = AceGUI:Create("ScrollFrame")
     scroll:SetFullWidth(true)
