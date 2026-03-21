@@ -135,6 +135,7 @@ function PP:BroadcastRoster()
     if not IsInGroup() then return end
     local gk = self:GetActiveGuildKey()
     local gd = PP.Repo.Roster:GetData(gk)
+    if not gd then return end
     self:SendAddonMessage(PP.MSG.ROSTER_UPDATE, {
         roster   = gd.roster,
         version  = gd.rosterVersion,
@@ -146,6 +147,7 @@ function PP:BroadcastSessionCreate(sessionID)
     if not IsInGroup() then return end
     local gk = self:GetActiveGuildKey()
     local gd = PP.Repo.Roster:GetData(gk)
+    if not gd then return end
     self:SendAddonMessage(PP.MSG.SESSION_CREATE, {
         raidID   = sessionID,
         raid     = gd.sessions[sessionID],
@@ -174,6 +176,7 @@ function PP:RequestSync()
     if not IsInGroup() then return end
     local gk = self:GetActiveGuildKey()
     local gd = PP.Repo.Roster:GetData(gk)
+    if not gd then return end
     -- Count session award records we have so peers can detect a gap
     local raidItemCount = 0
     for _, session in pairs(gd.sessions or {}) do
@@ -214,6 +217,7 @@ function PP:HandleSyncRequest(sender, data)
     local myGuild = self:GetPlayerGuild()
     if not myGuild or gk ~= myGuild then return end
     local gd = PP.Repo.Roster:GetData(gk)
+    if not gd then return end
     local requesterVersion   = data and data.rosterVersion   or -1
     local requesterRaidItems = data and data.raidItemCount   or -1
     -- Count our own awarded items across all sessions
@@ -243,7 +247,7 @@ function PP:HandleSyncFull(data, sender)
         if gk ~= myGuild and gk ~= activeKey and not self.db.global.guilds[gk] then
             -- (do nothing – ignore this guild's data entirely)
         else
-            local local_gd = PP.Repo.Roster:GetData(gk)
+            local local_gd = PP.Repo.Roster:EnsureData(gk)
             -- Roster: take higher version
             if incoming.rosterVersion and incoming.rosterVersion > local_gd.rosterVersion then
                 local_gd.roster        = incoming.roster or local_gd.roster
@@ -345,7 +349,7 @@ end
 function PP:HandleSessionCreate(data, sender)
     if not data or not data.raidID or not data.raid then return end
     local gk = data.guildKey or self:GetActiveGuildKey()
-    local gd = PP.Repo.Roster:GetData(gk)
+    local gd = PP.Repo.Roster:EnsureData(gk)
     -- End any conflicting locally-active session before adopting the incoming one.
     -- Guards against the race where two officers create sessions before either
     -- receives the other's broadcast.
@@ -400,6 +404,7 @@ function PP:HandleSessionClose(data, sender)
     if not data or not data.raidID then return end
     local gk = data.guildKey or self:GetActiveGuildKey()
     local gd = PP.Repo.Roster:GetData(gk)
+    if not gd then return end
     local session = gd.sessions[data.raidID]
     if session then
         session.active  = false

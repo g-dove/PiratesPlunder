@@ -89,7 +89,7 @@ function PP.Session:Create(raidName)
     local sessionID = tostring(time()) .. "-" .. math.random(1000, 9999)
     local leader    = PP:GetPlayerFullName()
     local gk        = PP:GetActiveGuildKey()
-    local gd        = PP.Repo.Roster:GetData(gk)
+    local gd        = PP.Repo.Roster:EnsureData(gk)
     raidName        = raidName or ("Session " .. date("%Y-%m-%d %H:%M"))
 
     gd.sessions[sessionID] = {

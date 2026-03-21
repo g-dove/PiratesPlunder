@@ -162,6 +162,7 @@ function PP.Loot:Award(key, fullName, free)
         -- Broadcast updated roster so all clients reflect the new score
         local gk = PP:GetActiveGuildKey()
         local gd = PP.Repo.Roster:GetData(gk)
+        if not gd then return end
         PP:SendAddonMessage(PP.MSG.SCORE_UPDATE, {
             roster   = gd.roster,
             version  = gd.rosterVersion,

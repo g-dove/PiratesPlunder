@@ -1,6 +1,15 @@
 # Changelog
 
-## [0.2.3] - 2026-03-21
+## [0.3.1] - 2026-03-21
+### Changed
+- Sync improvements for roster and session state propagation
+- Session renamed to use more descriptive identifiers
+
+### Fixed
+- Prevent auto-pass triggering when not in an active raid
+- Scroll position preserved on UI redraw
+
+## [0.3.0] - 2026-03-21
 ### Changed
 - Refactored data access into Repository layer (PP.Repo.Roster, PP.Repo.Loot)
 - Refactored business logic into Service layer (PP.Session, PP.Roster, PP.Loot)

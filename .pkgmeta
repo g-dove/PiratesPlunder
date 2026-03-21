@@ -1,5 +1,7 @@
 package-as: PiratesPlunder
 
+changelog-file: CHANGELOG.md
+
 ignore:
   - .vscode
   - CLAUDE.md

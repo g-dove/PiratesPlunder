@@ -18,6 +18,19 @@ function PP.Repo.Roster:GetData(guildKey)
         return PP._sandboxData
     end
     if not guildKey then return nil end
+    return PP.db.global.guilds[guildKey]  -- nil if not found; no auto-create
+end
+
+---------------------------------------------------------------------------
+-- EnsureData(guildKey)
+-- Like GetData but creates the guild entry if it does not exist yet.
+-- Only call this when creation is intentional (session creation, sync receive).
+---------------------------------------------------------------------------
+function PP.Repo.Roster:EnsureData(guildKey)
+    if PP._sandbox and guildKey == "__sandbox__" then
+        return PP._sandboxData
+    end
+    if not guildKey then return nil end
     if not PP.db.global.guilds[guildKey] then
         PP.db.global.guilds[guildKey] = {
             roster          = {},

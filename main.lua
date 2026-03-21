@@ -85,12 +85,12 @@ function PiratesPlunder:OnInitialize()
     if not self.db.global.migrated_v2 then
         local migrateKey = GetGuildInfo("player") or "__unguilded__"
         if self.db.global.roster and next(self.db.global.roster) ~= nil then
-            local gd = PP.Repo.Roster:GetData(migrateKey)
+            local gd = PP.Repo.Roster:EnsureData(migrateKey)
             for k, v in pairs(self.db.global.roster) do gd.roster[k] = v end
             gd.rosterVersion = self.db.global.rosterVersion or 0
         end
         if self.db.global.raids and next(self.db.global.raids) ~= nil then
-            local gd = PP.Repo.Roster:GetData(migrateKey)
+            local gd = PP.Repo.Roster:EnsureData(migrateKey)
             gd.sessions = gd.sessions or {}
             for id, raid in pairs(self.db.global.raids) do
                 gd.sessions[id] = raid
@@ -315,7 +315,7 @@ function PiratesPlunder:CreateCustomRoster(name)
     local trimmed = name and name:trim() or ""
     if trimmed == "" then return end
     local key = "__custom__:" .. trimmed
-    PP.Repo.Roster:GetData(key)     -- creates db entry if missing
+    PP.Repo.Roster:EnsureData(key)  -- creates db entry if missing
     self._activeGuildKey = key
     self:RefreshMainWindow()
 end
