@@ -12,6 +12,7 @@
 --   PP:HideAwardedLootWindow()
 --   PP:RefreshAwardedLootWindow()
 ---------------------------------------------------------------------------
+---@type PPAddon
 local PP     = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 local AceGUI = PP.AceGUI
 
@@ -55,9 +56,7 @@ function PP:ShowAwardedLootWindow(fullName)
     self.awardedLootWindow = f
 
     -- ESC closes this window
-    local frameName = "PPAwardedLootFrame"
-    _G[frameName] = f.frame
-    tinsert(UISpecialFrames, frameName)
+    PP:RegisterEscFrame(f, "PPAwardedLootFrame")
 
     local scroll = AceGUI:Create("ScrollFrame")
     scroll:SetFullWidth(true)
@@ -112,7 +111,7 @@ function PP:DrawAwardedLootContent(container, fullName)
 
     local noteLbl = AceGUI:Create("Label")
     noteLbl:SetFullWidth(true)
-    noteLbl:SetText("|cFF888888  History is read directly from saved raid records.|r")
+    noteLbl:SetText("|cFF888888  History is read directly from saved session records.|r")
     container:AddChild(noteLbl)
 
     local spacer = AceGUI:Create("Label")
@@ -125,7 +124,7 @@ function PP:DrawAwardedLootContent(container, fullName)
     if count == 0 then
         local empty = AceGUI:Create("Label")
         empty:SetFullWidth(true)
-        empty:SetText("|cFFAAAAAA  No items recorded for " .. shortName .. " in any raid.|r")
+        empty:SetText("|cFFAAAAAA  No items recorded for " .. shortName .. " in any session.|r")
         container:AddChild(empty)
         return
     end
@@ -152,7 +151,7 @@ function PP:DrawAwardedLootContent(container, fullName)
     makeHeader("Item",   COL_ITEM)
     makeHeader("Type",   COL_TYPE)
     makeHeader("Cost",   COL_COST)
-    makeHeader("Raid",   COL_RAID)
+    makeHeader("Session", COL_RAID)
     makeHeader("Date",   COL_DATE)
 
     local divider = AceGUI:Create("Label")
@@ -217,7 +216,7 @@ function PP:DrawAwardedLootContent(container, fullName)
             local capturedItem = item
             raidLbl.frame:SetScript("OnEnter", function(f)
                 GameTooltip:SetOwner(f, "ANCHOR_CURSOR")
-                GameTooltip:AddLine(capturedItem.raidName or "Unknown Raid", 1, 0.82, 0)
+                GameTooltip:AddLine(capturedItem.raidName or "Unknown Session", 1, 0.82, 0)
                 GameTooltip:AddLine(
                     "Roster: " .. PP:GetRosterDisplayName(capturedItem.guildKey or ""),
                     0.8, 0.8, 0.8
@@ -229,7 +228,7 @@ function PP:DrawAwardedLootContent(container, fullName)
                     )
                 end
                 GameTooltip:AddLine(" ")
-                GameTooltip:AddLine("Click to view raid", 0, 1, 0)
+                GameTooltip:AddLine("Click to view session", 0, 1, 0)
                 GameTooltip:Show()
             end)
             raidLbl.frame:SetScript("OnLeave", function()

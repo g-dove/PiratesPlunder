@@ -12,6 +12,7 @@
 -- Public API:
 --   PP:GetPlayerAwardedLoot(fullName)  → list, newest-first
 ---------------------------------------------------------------------------
+---@type PPAddon
 local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 
 ---------------------------------------------------------------------------
@@ -34,8 +35,8 @@ function PP:GetPlayerAwardedLoot(fullName)
     end
 
     for guildKey, gd in pairs(blocks) do
-        if gd.raids then
-            for raidID, raid in pairs(gd.raids) do
+        if gd.sessions then
+            for raidID, raid in pairs(gd.sessions) do
                 if raid.items then
                     for _, item in ipairs(raid.items) do
                         if item.awardedTo == fullName then

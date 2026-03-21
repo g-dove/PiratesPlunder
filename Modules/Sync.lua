@@ -1,6 +1,7 @@
 ---------------------------------------------------------------------------
 -- Pirates Plunder – Sync (AceComm messaging)
 ---------------------------------------------------------------------------
+---@type PPAddon
 local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 
 ---------------------------------------------------------------------------
@@ -43,11 +44,11 @@ function PP:OnCommReceived(prefix, message, distribution, sender)
     elseif msgType == PP.MSG.ROSTER_UPDATE then
         self:HandleRosterUpdate(data, sender)
 
-    elseif msgType == PP.MSG.RAID_CREATE then
-        self:HandleRaidCreate(data, sender)
+    elseif msgType == PP.MSG.SESSION_CREATE then
+        self:HandleSessionCreate(data, sender)
 
-    elseif msgType == PP.MSG.RAID_CLOSE then
-        self:HandleRaidClose(data, sender)
+    elseif msgType == PP.MSG.SESSION_CLOSE then
+        self:HandleSessionClose(data, sender)
 
     elseif msgType == PP.MSG.SCORE_UPDATE then
         self:HandleScoreUpdate(data, sender)
@@ -73,8 +74,14 @@ function PP:OnCommReceived(prefix, message, distribution, sender)
     elseif msgType == PP.MSG.RAID_SETTINGS then
         self:HandleRaidSettings(data, sender)
 
-    elseif msgType == PP.MSG.RAID_DELETE then
-        self:HandleRaidDelete(data, sender)
+    elseif msgType == PP.MSG.SESSION_DELETE then
+        self:HandleSessionDelete(data, sender)
+
+    elseif msgType == PP.MSG.LOOT_STATE_QUERY then
+        self:HandleLootStateQuery(sender, data)
+
+    elseif msgType == PP.MSG.LOOT_STATE_REPLY then
+        self:HandleLootStateReply(data)
 
     elseif msgType == PP.MSG.VERSION_REQUEST then
         self:HandleVersionRequest(sender)
@@ -127,7 +134,7 @@ end
 function PP:BroadcastRoster()
     if not IsInGroup() then return end
     local gk = self:GetActiveGuildKey()
-    local gd = self:GetGuildData(gk)
+    local gd = PP.Repo.Roster:GetData(gk)
     self:SendAddonMessage(PP.MSG.ROSTER_UPDATE, {
         roster   = gd.roster,
         version  = gd.rosterVersion,
@@ -135,29 +142,29 @@ function PP:BroadcastRoster()
     })
 end
 
-function PP:BroadcastRaidCreate(raidID)
+function PP:BroadcastSessionCreate(sessionID)
     if not IsInGroup() then return end
     local gk = self:GetActiveGuildKey()
-    local gd = self:GetGuildData(gk)
-    self:SendAddonMessage(PP.MSG.RAID_CREATE, {
-        raidID   = raidID,
-        raid     = gd.raids[raidID],
+    local gd = PP.Repo.Roster:GetData(gk)
+    self:SendAddonMessage(PP.MSG.SESSION_CREATE, {
+        raidID   = sessionID,
+        raid     = gd.sessions[sessionID],
         guildKey = gk,
     })
 end
 
-function PP:BroadcastRaidClose(raidID)
+function PP:BroadcastSessionClose(sessionID)
     if not IsInGroup() then return end
-    self:SendAddonMessage(PP.MSG.RAID_CLOSE, {
-        raidID   = raidID,
+    self:SendAddonMessage(PP.MSG.SESSION_CLOSE, {
+        raidID   = sessionID,
         guildKey = self:GetActiveGuildKey(),
     })
 end
 
-function PP:BroadcastRaidDelete(raidID, guildKey, newVersion)
+function PP:BroadcastSessionDelete(sessionID, guildKey, newVersion)
     if not IsInGroup() then return end
-    self:SendAddonMessage(PP.MSG.RAID_DELETE, {
-        raidID      = raidID,
+    self:SendAddonMessage(PP.MSG.SESSION_DELETE, {
+        raidID      = sessionID,
         guildKey    = guildKey,
         version     = newVersion,
     })
@@ -166,11 +173,11 @@ end
 function PP:RequestSync()
     if not IsInGroup() then return end
     local gk = self:GetActiveGuildKey()
-    local gd = self:GetGuildData(gk)
-    -- Count raid award records we have so peers can detect a gap
+    local gd = PP.Repo.Roster:GetData(gk)
+    -- Count session award records we have so peers can detect a gap
     local raidItemCount = 0
-    for _, raid in pairs(gd.raids or {}) do
-        raidItemCount = raidItemCount + #(raid.items or {})
+    for _, session in pairs(gd.sessions or {}) do
+        raidItemCount = raidItemCount + #(session.items or {})
     end
     self:SendAddonMessage(PP.MSG.SYNC_REQUEST, {
         guildKey      = gk,
@@ -185,7 +192,12 @@ function PP:SendFullSync(target)
     for gk, gd in pairs(self.db.global.guilds) do
         guilds[gk] = gd
     end
-    self:SendAddonMessage(PP.MSG.SYNC_FULL, { guilds = guilds }, target)
+    self:SendAddonMessage(PP.MSG.SYNC_FULL, {
+        guilds       = guilds,
+        raidSettings = {
+            autoPassEpicRolls = self.db.global.autoPassEpicRolls,
+        },
+    }, target)
 end
 
 ---------------------------------------------------------------------------
@@ -201,13 +213,13 @@ function PP:HandleSyncRequest(sender, data)
     -- Only respond if the requester's guild matches ours
     local myGuild = self:GetPlayerGuild()
     if not myGuild or gk ~= myGuild then return end
-    local gd = self:GetGuildData(gk)
+    local gd = PP.Repo.Roster:GetData(gk)
     local requesterVersion   = data and data.rosterVersion   or -1
     local requesterRaidItems = data and data.raidItemCount   or -1
-    -- Count our own awarded items across all raids
+    -- Count our own awarded items across all sessions
     local myRaidItems = 0
-    for _, raid in pairs(gd.raids or {}) do
-        myRaidItems = myRaidItems + #(raid.items or {})
+    for _, session in pairs(gd.sessions or {}) do
+        myRaidItems = myRaidItems + #(session.items or {})
     end
     -- Respond if roster OR raid-award records are behind
     if requesterVersion >= gd.rosterVersion and requesterRaidItems >= myRaidItems then return end
@@ -231,62 +243,88 @@ function PP:HandleSyncFull(data, sender)
         if gk ~= myGuild and gk ~= activeKey and not self.db.global.guilds[gk] then
             -- (do nothing – ignore this guild's data entirely)
         else
-        local local_gd = self:GetGuildData(gk)
-        -- Roster: take higher version
-        if incoming.rosterVersion and incoming.rosterVersion > local_gd.rosterVersion then
-            local_gd.roster        = incoming.roster or local_gd.roster
-            local_gd.rosterVersion = incoming.rosterVersion
-        end
-        -- Raids: merge (add unknown, update known if incoming has more data)
-        if incoming.raids then
-            for id, raid in pairs(incoming.raids) do
-                local local_raid = local_gd.raids[id]
-                if not local_raid then
-                    -- Only add if we have no tombstone for this raid
-                    if not (local_gd.deletedRaids and local_gd.deletedRaids[id]) then
-                        local_gd.raids[id] = raid
-                    end
-                else
-                    if raid.items and #raid.items > #(local_raid.items or {}) then
-                        local_raid.items = raid.items
-                    end
-                    if raid.bosses and #raid.bosses > #(local_raid.bosses or {}) then
-                        local_raid.bosses = raid.bosses
-                    end
-                    if raid.endTime and not local_raid.endTime then
-                        local_raid.endTime = raid.endTime
-                        local_raid.active  = false
+            local local_gd = PP.Repo.Roster:GetData(gk)
+            -- Roster: take higher version
+            if incoming.rosterVersion and incoming.rosterVersion > local_gd.rosterVersion then
+                local_gd.roster        = incoming.roster or local_gd.roster
+                local_gd.rosterVersion = incoming.rosterVersion
+            end
+            -- Sessions: merge (add unknown, update known if incoming has more data)
+            if incoming.sessions then
+                for id, session in pairs(incoming.sessions) do
+                    local local_session = local_gd.sessions[id]
+                    if not local_session then
+                        -- Only add if we have no tombstone for this session
+                        if not (local_gd.deletedSessions and local_gd.deletedSessions[id]) then
+                            local_gd.sessions[id] = session
+                        end
+                    else
+                        if session.items and #session.items > #(local_session.items or {}) then
+                            local_session.items = session.items
+                        end
+                        if session.bosses and #session.bosses > #(local_session.bosses or {}) then
+                            local_session.bosses = session.bosses
+                        end
+                        if session.endTime and not local_session.endTime then
+                            local_session.endTime = session.endTime
+                            local_session.active  = false
+                        end
                     end
                 end
             end
-        end
 
-        -- Tombstones: apply deletions from the sender that we haven't seen yet
-        if incoming.deletedRaids then
-            if not local_gd.deletedRaids then local_gd.deletedRaids = {} end
-            for raidID, tombVer in pairs(incoming.deletedRaids) do
-                if not local_gd.deletedRaids[raidID] then
-                    -- We haven't recorded this deletion yet – apply it
-                    local_gd.raids[raidID] = nil
-                    local_gd.deletedRaids[raidID] = tombVer
-                    -- Advance our version so future syncs from us carry the tombstone
-                    if tombVer > local_gd.rosterVersion then
-                        local_gd.rosterVersion = tombVer
+            -- Tombstones: apply deletions from the sender that we haven't seen yet
+            if incoming.deletedSessions then
+                if not local_gd.deletedSessions then local_gd.deletedSessions = {} end
+                for sessionID, tombVer in pairs(incoming.deletedSessions) do
+                    if not local_gd.deletedSessions[sessionID] then
+                        -- We haven't recorded this deletion yet – apply it
+                        local_gd.sessions[sessionID] = nil
+                        local_gd.deletedSessions[sessionID] = tombVer
+                        -- Advance our version so future syncs from us carry the tombstone
+                        if tombVer > local_gd.rosterVersion then
+                            local_gd.rosterVersion = tombVer
+                        end
+                        if local_gd.activeSessionID == sessionID then
+                            PP.Session:End(PP.SESSION_END.SYNC_FULL, sessionID, gk)
+                        end
                     end
-                    if local_gd.activeRaidID == raidID then
-                        local_gd.activeRaidID = nil
-                        wipe(self.pendingLoot)
-                        self:CloseLootPopups()
-                        self:RefreshLootMasterWindow()
-                        self:RefreshLootResponseFrame()
+                end
+            end
+            if incoming.activeSessionID then
+                local incomingID = incoming.activeSessionID
+                -- End any conflicting locally-active session before adopting the synced one.
+                local existingID = local_gd.activeSessionID
+                if existingID and existingID ~= incomingID
+                   and local_gd.sessions[existingID]
+                   and local_gd.sessions[existingID].active then
+                    PP.Session:End(PP.SESSION_END.SYNC_FULL, existingID, gk)
+                end
+                local_gd.activeSessionID = incomingID
+                -- Part 3: if we previously ended this session prematurely, restore it
+                if local_gd.sessions[incomingID] and not local_gd.sessions[incomingID].active then
+                    local_gd.sessions[incomingID].active  = true
+                    local_gd.sessions[incomingID].endTime = nil
+                end
+                -- Cancel any deferred session end that referenced this session
+                if self.db.global.pendingSessionEnd
+                    and self.db.global.pendingSessionEnd.sessionID == incomingID then
+                    self.db.global.pendingSessionEnd = nil
+                    if self._pendingSessionEndTimer then
+                        self:CancelTimer(self._pendingSessionEndTimer)
+                        self._pendingSessionEndTimer = nil
                     end
                 end
             end
         end
-        if incoming.activeRaidID then
-            local_gd.activeRaidID = incoming.activeRaidID
+    end
+    -- Apply raid settings carried in the sync payload.  RAID_SETTINGS broadcast
+    -- is the primary path but can lose the race with loot rolls on reconnect;
+    -- this acts as a reliable fallback since only officers respond to SYNC_REQUEST.
+    if data.raidSettings then
+        if data.raidSettings.autoPassEpicRolls ~= nil then
+            self.db.global.autoPassEpicRolls = data.raidSettings.autoPassEpicRolls
         end
-        end -- else (guild key is known/relevant)
     end
     self:RefreshMainWindow()
 end
@@ -294,7 +332,7 @@ end
 -- Roster update from an officer
 function PP:HandleRosterUpdate(data, sender)
     if not data or not data.guildKey then return end
-    local gd = self:GetGuildData(data.guildKey)
+    local gd = PP.Repo.Roster:GetData(data.guildKey)
     if not gd then return end
     if data.version and data.version > gd.rosterVersion then
         gd.roster        = data.roster or gd.roster
@@ -303,79 +341,80 @@ function PP:HandleRosterUpdate(data, sender)
     end
 end
 
--- Raid created by an officer
-function PP:HandleRaidCreate(data, sender)
+-- Session created by an officer
+function PP:HandleSessionCreate(data, sender)
     if not data or not data.raidID or not data.raid then return end
     local gk = data.guildKey or self:GetActiveGuildKey()
-    local gd = self:GetGuildData(gk)
-    gd.raids[data.raidID] = data.raid
-    gd.activeRaidID = data.raidID
+    local gd = PP.Repo.Roster:GetData(gk)
+    -- End any conflicting locally-active session before adopting the incoming one.
+    -- Guards against the race where two officers create sessions before either
+    -- receives the other's broadcast.
+    local existingID = gd.activeSessionID
+    if existingID and existingID ~= data.raidID
+       and gd.sessions[existingID]
+       and gd.sessions[existingID].active then
+        PP.Session:End(PP.SESSION_END.SYNC_RECEIVED, existingID, gk)
+    end
+    gd.sessions[data.raidID] = data.raid
+    gd.activeSessionID = data.raidID
     -- Adopt this guild key as active if we don't have one set
     if not self._activeGuildKey then
         self._activeGuildKey = gk
     end
-    self:Print("Raid started: " .. (data.raid.name or data.raidID))
+    self:Print("Session started: " .. (data.raid.name or data.raidID))
     self:RefreshMainWindow()
 end
 
--- Raid deleted by an officer
-function PP:HandleRaidDelete(data, sender)
+-- Session deleted by an officer
+function PP:HandleSessionDelete(data, sender)
     if not data or not data.raidID or not data.guildKey then return end
-    local gd = self:GetGuildData(data.guildKey)
+    local gd = PP.Repo.Roster:GetData(data.guildKey)
     if not gd then return end
 
     -- Only apply if the incoming version is newer than ours (same guard as roster updates)
     if data.version and data.version <= gd.rosterVersion then return end
 
-    gd.raids[data.raidID] = nil
+    gd.sessions[data.raidID] = nil
     gd.rosterVersion = data.version
 
     -- Record tombstone so this deletion propagates to offline peers via future syncs
-    if not gd.deletedRaids then gd.deletedRaids = {} end
-    gd.deletedRaids[data.raidID] = data.version
+    if not gd.deletedSessions then gd.deletedSessions = {} end
+    gd.deletedSessions[data.raidID] = data.version
 
-    if gd.activeRaidID == data.raidID then
-        gd.activeRaidID = nil
-        wipe(self.pendingLoot)
-        self:CloseLootPopups()
-        self:RefreshLootMasterWindow()
-        self:RefreshLootResponseFrame()
+    if gd.activeSessionID == data.raidID then
+        PP.Session:End(PP.SESSION_END.SYNC_DELETE, data.raidID, data.guildKey)
     end
 
-    -- Close the detail window if it was showing the deleted raid
+    -- Close the detail window if it was showing the deleted session
     if self._raidDetailWindow then
         self._raidDetailWindow:Release()
         self._raidDetailWindow = nil
     end
 
-    self:Print("A raid record was deleted by an officer.")
+    self:Print("A session record was deleted by an officer.")
     self:RefreshMainWindow()
 end
 
--- Raid closed
-function PP:HandleRaidClose(data, sender)
+-- Session closed
+function PP:HandleSessionClose(data, sender)
     if not data or not data.raidID then return end
     local gk = data.guildKey or self:GetActiveGuildKey()
-    local gd = self:GetGuildData(gk)
-    local raid = gd.raids[data.raidID]
-    if raid then
-        raid.active  = false
-        raid.endTime = time()
+    local gd = PP.Repo.Roster:GetData(gk)
+    local session = gd.sessions[data.raidID]
+    if session then
+        session.active  = false
+        session.endTime = time()
     end
-    if gd.activeRaidID == data.raidID then
-        gd.activeRaidID = nil
+    if gd.activeSessionID == data.raidID then
+        PP.Session:End(PP.SESSION_END.SYNC_RECEIVED, data.raidID, gk)
     end
-    wipe(self.pendingLoot)
-    self:CloseLootPopups()
-    self:Print("Raid ended.")
     self:RefreshMainWindow()
-    self:RefreshLootMasterWindow()
 end
 
 -- Score update
 function PP:HandleScoreUpdate(data, sender)
     if not data or not data.guildKey then return end
-    local gd = self:GetGuildData(data.guildKey)
+    local gd = PP.Repo.Roster:GetData(data.guildKey)
     if not gd then return end
     if data.version and data.version > gd.rosterVersion then
         gd.roster        = data.roster or gd.roster
@@ -388,7 +427,7 @@ end
 function PP:HandleLootPost(data, sender)
     if not data or not data.key then return end
     -- Store locally so we can respond
-    self.pendingLoot[data.key] = {
+    PP.Repo.Loot:SetEntry(data.key, {
         itemLink      = data.itemLink,
         itemID        = data.itemID,
         postedBy      = data.postedBy or sender,
@@ -398,7 +437,7 @@ function PP:HandleLootPost(data, sender)
         awarded       = false,
         awardedTo     = nil,
         allowTransmog = data.allowTransmog ~= false,  -- default true
-    }
+    })
     -- Show popup for non-poster
     if sender ~= self:GetPlayerFullName() then
         self:ShowLootPopup(data.key, data.itemLink)
@@ -418,11 +457,11 @@ function PP:HandleLootAward(data, sender)
     if not data or not data.key then return end
     -- Record item in raid history for all clients
     if data.itemLink and data.awardedTo then
-        self:RecordItemAward(data.itemLink, data.itemID, data.awardedTo, data.pointsSpent, data.response)
+        PP.Session:RecordItemAward(data.itemLink, data.itemID, data.awardedTo, data.pointsSpent, data.response, data.key)
     end
     -- Apply score deduction to the winner
     if data.awardedTo then
-        local roster = self:GetRoster()
+        local roster = PP.Repo.Roster:GetRoster()
         if roster[data.awardedTo] then
             if data.newScore ~= nil then
                 roster[data.awardedTo].score = data.newScore
@@ -446,7 +485,7 @@ function PP:HandleLootAward(data, sender)
         self.lootPopups[data.key]:Hide()
         self.lootPopups[data.key] = nil
     end
-    self.pendingLoot[data.key] = nil
+    PP.Repo.Loot:ClearEntry(data.key)
     self:RefreshLootMasterWindow()
     self:RefreshLootResponseFrame()
     self:RefreshMainWindow()
@@ -462,19 +501,85 @@ end
 -- Loot item flag updated (e.g. allowTransmog toggled by loot master)
 function PP:HandleLootUpdate(data)
     if not data or not data.key then return end
-    if self.pendingLoot[data.key] then
+    local entry = PP.Repo.Loot:GetEntry(data.key)
+    if entry then
         if data.allowTransmog ~= nil then
-            self.pendingLoot[data.key].allowTransmog = data.allowTransmog
+            entry.allowTransmog = data.allowTransmog
+            PP.Repo.Loot:Save()
         end
         self:RefreshLootResponseFrame()
         self:RefreshLootMasterWindow()
     end
 end
 
+-- Loot state query: sent by a client re-entering world to resolve stale pending items.
+-- Any player who can post loot (officer, raid leader/assist) may reply.
+function PP:HandleLootStateQuery(sender, data)
+    if not self:CanPostLoot() then return end
+    if not data or not data.keys then return end
+
+    local results = {}
+    for _, key in ipairs(data.keys) do
+        if PP.Repo.Loot:GetEntry(key) then
+            results[key] = { status = "pending" }
+        else
+            -- Check session items for an awarded record matching this key
+            local session = PP.Repo.Roster:GetActiveSession()
+            local found = false
+            if session and session.items then
+                for _, item in ipairs(session.items) do
+                    if item.key == key then
+                        results[key] = {
+                            status      = "awarded",
+                            awardedTo   = item.awardedTo,
+                            pointsSpent = item.pointsSpent,
+                        }
+                        found = true
+                        break
+                    end
+                end
+            end
+            if not found then
+                results[key] = { status = "unknown" }
+            end
+        end
+    end
+
+    self:SendAddonMessage(PP.MSG.LOOT_STATE_REPLY, { results = results }, self:GetShortName(sender))
+end
+
+-- Loot state reply: resolve stale pending loot entries on the querying client.
+function PP:HandleLootStateReply(data)
+    if not data or not data.results then return end
+    -- Cancel the fallback timer set by _requestStateSync()
+    PP._lootStateVerifyPending = false
+
+    local changed = false
+    for key, result in pairs(data.results) do
+        if result.status == "awarded" or result.status == "unknown" then
+            if PP.Repo.Loot:GetEntry(key) then
+                if self.lootPopups[key] then
+                    self.lootPopups[key]:Hide()
+                    self.lootPopups[key] = nil
+                end
+                PP.Repo.Loot:ClearEntry(key)
+                changed = true
+            end
+        end
+        -- "pending": leave local entry as-is
+    end
+    if changed then
+        self:RefreshLootResponseFrame()
+        self:RefreshLootMasterWindow()
+    end
+    -- Show popup for any items still pending that we haven't responded to
+    self:ShowLootResponseFrameIfNeeded()
+end
+
 -- Loot posting cancelled
 function PP:HandleLootCancel(data, sender)
     if not data or not data.key then return end
-    self.pendingLoot[data.key] = nil
+    PP.Repo.Loot:ClearEntry(data.key)
     if self.lootPopups[data.key] then
         self.lootPopups[data.key]:Hide()
         self.lootPopups[data.key] = nil

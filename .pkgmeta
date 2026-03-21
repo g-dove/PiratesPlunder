@@ -1,0 +1,5 @@
+package-as: PiratesPlunder
+
+ignore:
+  - .vscode
+  - CLAUDE.md

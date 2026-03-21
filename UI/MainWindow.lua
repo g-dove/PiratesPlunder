@@ -1,6 +1,7 @@
 ---------------------------------------------------------------------------
 -- Pirates Plunder – Main Window UI (Roster + Raids tabs)
 ---------------------------------------------------------------------------
+---@type PPAddon
 local PP  = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 local AceGUI = PP.AceGUI
 
@@ -20,8 +21,8 @@ function PP:RefreshMainWindow()
     if not self.mainWindow then return end
     if self._currentTab == "roster" then
         self:DrawRosterTab(self._tabContainer)
-    elseif self._currentTab == "raids" then
-        self:DrawRaidsTab(self._tabContainer)
+    elseif self._currentTab == "sessions" then
+        self:DrawSessionsTab(self._tabContainer)
     elseif self._currentTab == "settings" then
         self:DrawSettingsTab(self._tabContainer)
     end
@@ -43,15 +44,13 @@ function PP:CreateMainWindow()
     self.mainWindow = f
 
     -- Make ESC close this window
-    local frameName = "PPMainWindowFrame"
-    _G[frameName] = f.frame
-    tinsert(UISpecialFrames, frameName)
+    PP:RegisterEscFrame(f, "PPMainWindowFrame")
 
     local tabGroup = AceGUI:Create("TabGroup")
     tabGroup:SetLayout("Fill")
     tabGroup:SetTabs({
         { value = "roster",   text = "Roster" },
-        { value = "raids",    text = "Raids" },
+        { value = "sessions", text = "Sessions" },
         { value = "settings", text = "Settings" },
     })
     tabGroup:SetCallback("OnGroupSelected", function(container, _, group)
@@ -60,8 +59,8 @@ function PP:CreateMainWindow()
         self._tabContainer = container
         if group == "roster" then
             self:DrawRosterTab(container)
-        elseif group == "raids" then
-            self:DrawRaidsTab(container)
+        elseif group == "sessions" then
+            self:DrawSessionsTab(container)
         elseif group == "settings" then
             self:DrawSettingsTab(container)
         end
@@ -116,7 +115,7 @@ function PP:DrawRosterTab(container)
         dd:SetLabel("Active Roster")
         dd:SetWidth(220)
         local ddItems = {}
-        for gk in pairs(self.db.global.guilds) do
+        for _, gk in ipairs(PP.Repo.Roster:GetAllGuildKeys()) do
             ddItems[gk] = PP:GetRosterDisplayName(gk)
         end
         dd:SetList(ddItems)
@@ -152,7 +151,7 @@ function PP:DrawRosterTab(container)
         addBox:SetWidth(200)
         addBox:SetCallback("OnEnterPressed", function(widget, _, text)
             if text and text:trim() ~= "" then
-                PP:AddToRoster(text:trim())
+                PP.Roster:Add(text:trim())
                 widget:SetText("")
             end
         end)
@@ -191,7 +190,7 @@ function PP:DrawRosterTab(container)
         local sel      = PP._selectedRosterPlayer
         local selEntry = nil
         if sel then
-            for _, e in ipairs(self:GetSortedRoster()) do
+            for _, e in ipairs(PP.Roster:GetSorted()) do
                 if e.fullName == sel then selEntry = e; break end
             end
         end
@@ -225,7 +224,7 @@ function PP:DrawRosterTab(container)
             if not selEntry then return end
             local val = tonumber(text)
             if val then
-                PP:SetPlayerScore(sel, val)
+                PP.Roster:SetScore(sel, val)
             else
                 widget:SetText(tostring(selEntry.score))
             end
@@ -237,7 +236,7 @@ function PP:DrawRosterTab(container)
         minusBtn:SetWidth(50)
         minusBtn:SetDisabled(not hasSelection)
         minusBtn:SetCallback("OnClick", function()
-            if selEntry then PP:SetPlayerScore(sel, math.max(0, selEntry.score - 1)) end
+            if selEntry then PP.Roster:SetScore(sel, math.max(0, selEntry.score - 1)) end
         end)
         selRow:AddChild(minusBtn)
 
@@ -246,7 +245,7 @@ function PP:DrawRosterTab(container)
         plusBtn:SetWidth(50)
         plusBtn:SetDisabled(not hasSelection)
         plusBtn:SetCallback("OnClick", function()
-            if selEntry then PP:SetPlayerScore(sel, selEntry.score + 1) end
+            if selEntry then PP.Roster:SetScore(sel, selEntry.score + 1) end
         end)
         selRow:AddChild(plusBtn)
 
@@ -305,7 +304,7 @@ function PP:DrawRosterTab(container)
                 PP:Print("Enter a valid number.")
                 return
             end
-            PP:AddScoreToRaidMembers(amt)
+            PP.Roster:AddScoreToRaidMembers(amt)
         end)
         groupRow:AddChild(applyBtn)
 
@@ -317,7 +316,7 @@ function PP:DrawRosterTab(container)
                 PP:Print("You must be in a group.")
                 return
             end
-            PP:AddScoreToRaidMembers(1)
+            PP.Roster:AddScoreToRaidMembers(1)
         end)
         groupRow:AddChild(plusOneBtn)
 
@@ -368,8 +367,8 @@ function PP:DrawRosterTab(container)
     end
 
     -- Player rows
-    local sorted  = self:GetSortedRoster()
-    local raidSet = self:GetRaidMemberSet()
+    local sorted  = PP.Roster:GetSorted()
+    local raidSet = PP.Roster:GetRaidMemberSet()
 
     local padTop = AceGUI:Create("Label")
     padTop:SetFullWidth(true)
@@ -479,14 +478,14 @@ function PP:DrawRosterTab(container)
 end
 
 ---------------------------------------------------------------------------
--- Raids tab
+-- Sessions tab
 ---------------------------------------------------------------------------
-function PP:DrawRaidsTab(container)
+function PP:DrawSessionsTab(container)
     -- Save scroll position before releasing (ReleaseChildren wipes it synchronously)
-    local savedRaidsScroll = 0
-    if self._raidsScroll then
-        local st = self._raidsScroll.status or self._raidsScroll.localstatus
-        savedRaidsScroll = st and st.scrollvalue or 0
+    local savedSessionsScroll = 0
+    if self._sessionsScroll then
+        local st = self._sessionsScroll.status or self._sessionsScroll.localstatus
+        savedSessionsScroll = st and st.scrollvalue or 0
     end
     container:ReleaseChildren()
     local canModify = self:CanModify()
@@ -497,7 +496,7 @@ function PP:DrawRaidsTab(container)
     scroll:SetFullHeight(true)
     scroll:SetLayout("List")
     container:AddChild(scroll)
-    self._raidsScroll = scroll
+    self._sessionsScroll = scroll
 
     -- ── Roster selector ──────────────────────────────────────────────────
     if not PP:IsSandbox() then
@@ -510,14 +509,14 @@ function PP:DrawRaidsTab(container)
         dd:SetLabel("Active Roster")
         dd:SetWidth(220)
         local ddItems = {}
-        for gk in pairs(self.db.global.guilds) do
+        for _, gk in ipairs(PP.Repo.Roster:GetAllGuildKeys()) do
             ddItems[gk] = PP:GetRosterDisplayName(gk)
         end
         dd:SetList(ddItems)
         dd:SetValue(PP:GetActiveGuildKey())
         dd:SetCallback("OnValueChanged", function(_, _, val)
             PP._activeGuildKey = val
-            PP:DrawRaidsTab(container)
+            PP:DrawSessionsTab(container)
         end)
         ddGroup:AddChild(dd)
     end
@@ -530,48 +529,48 @@ function PP:DrawRaidsTab(container)
 
     if canModify then
         local nameBox = AceGUI:Create("EditBox")
-        nameBox:SetLabel("Raid Name")
+        nameBox:SetLabel("Session Name")
         nameBox:SetWidth(200)
-        nameBox:SetText(date("%Y-%m-%d") .. " Raid")
+        nameBox:SetText(date("%Y-%m-%d") .. " Session")
         topGroup:AddChild(nameBox)
         self._raidNameBox = nameBox
 
-        if self:HasActiveRaid() then
+        if PP.Repo.Roster:HasActiveSession() then
             local closeBtn = AceGUI:Create("Button")
-            closeBtn:SetText("Close Raid")
+            closeBtn:SetText("Close Session")
             closeBtn:SetWidth(120)
             closeBtn:SetCallback("OnClick", function()
-                PP:EndRaid()
+                PP.Session:End(PP.SESSION_END.OFFICER_ACTION)
             end)
             topGroup:AddChild(closeBtn)
         else
             local createBtn = AceGUI:Create("Button")
-            createBtn:SetText("Create Raid")
+            createBtn:SetText("Create Session")
             createBtn:SetWidth(120)
             createBtn:SetCallback("OnClick", function()
                 local raidName = nameBox:GetText()
-                PP:CreateRaid(raidName)
+                PP.Session:Create(raidName)
             end)
             topGroup:AddChild(createBtn)
         end
     end
 
-    -- Active raid indicator
-    if self:HasActiveRaid() then
-        local raid = self:GetActiveRaid()
+    -- Active session indicator
+    if PP.Repo.Roster:HasActiveSession() then
+        local session = PP.Repo.Roster:GetActiveSession()
         local activeLabel = AceGUI:Create("Label")
         activeLabel:SetFullWidth(true)
-        activeLabel:SetText("|cFF00FF00Active Raid:|r " .. (raid and raid.name or "Unknown"))
+        activeLabel:SetText("|cFF00FF00Active Session:|r " .. (session and session.name or "Unknown"))
         scroll:AddChild(activeLabel)
     end
 
-    -- Raid history heading
+    -- Session history heading
     local heading = AceGUI:Create("Heading")
     heading:SetFullWidth(true)
-    heading:SetText("Raid History")
+    heading:SetText("Session History")
     scroll:AddChild(heading)
 
-    -- Raid rows
+    -- Session rows
     local history = self:GetRaidHistory()
 
     for _, raid in ipairs(history) do
@@ -594,12 +593,12 @@ function PP:DrawRaidsTab(container)
     if #history == 0 then
         local empty = AceGUI:Create("Label")
         empty:SetFullWidth(true)
-        empty:SetText("\n  No raids recorded yet.")
+        empty:SetText("\n  No sessions recorded yet.")
         scroll:AddChild(empty)
     end
     -- Restore scroll position after layout settles
-    if savedRaidsScroll > 0 then
-        C_Timer.After(0, function() if scroll.SetScroll then scroll:SetScroll(savedRaidsScroll) end end)
+    if savedSessionsScroll > 0 then
+        C_Timer.After(0, function() if scroll.SetScroll then scroll:SetScroll(savedSessionsScroll) end end)
     end
 end
 
@@ -607,11 +606,12 @@ end
 -- Raid detail popup (items + bosses)
 ---------------------------------------------------------------------------
 function PP:ShowRaidDetail(raidID)
-    -- Search all guild data blocks since the raid may belong to any guild
+    -- Search all guild data blocks since the session may belong to any guild
     local raid
-    for _, gd in pairs(self.db.global.guilds) do
-        if gd.raids and gd.raids[raidID] then
-            raid = gd.raids[raidID]
+    for _, gk in ipairs(PP.Repo.Roster:GetAllGuildKeys()) do
+        local gd = PP.Repo.Roster:GetData(gk)
+        if gd and gd.sessions and gd.sessions[raidID] then
+            raid = gd.sessions[raidID]
             break
         end
     end
@@ -624,7 +624,7 @@ function PP:ShowRaidDetail(raidID)
     end
 
     local f = AceGUI:Create("Frame")
-    f:SetTitle(raid.name or "Raid Detail")
+    f:SetTitle(raid.name or "Session Detail")
     f:SetLayout("Fill")
     f:SetWidth(550)
     f:SetHeight(450)
@@ -659,11 +659,11 @@ function PP:ShowRaidDetail(raidID)
     if self:IsOfficerOrHigher() and not self:IsSandbox() then
         local warnLbl = AceGUI:Create("Label")
         warnLbl:SetFullWidth(true)
-        warnLbl:SetText("|cFFFF4400Warning: deleting a raid permanently removes all its loot and boss records. This cannot be undone and will sync to all online raid members.|r")
+        warnLbl:SetText("|cFFFF4400Warning: deleting a session permanently removes all its loot and boss records. This cannot be undone and will sync to all online raid members.|r")
         scroll:AddChild(warnLbl)
 
         local deleteBtn = AceGUI:Create("Button")
-        deleteBtn:SetText("|cFFFF4400Delete Raid|r")
+        deleteBtn:SetText("|cFFFF4400Delete Session|r")
         deleteBtn:SetWidth(130)
         local capturedID = raidID
         deleteBtn:SetCallback("OnClick", function()
@@ -731,7 +731,7 @@ function PP:DrawSettingsTab(container)
     if PP:IsSandbox() then
         local banner = AceGUI:Create("Label")
         banner:SetFullWidth(true)
-        banner:SetText("|cFFFFD100SANDBOX ACTIVE — simulating raid leader. Roster, raid, and loot changes are NOT saved to disk.\nUse /pp sandbox to disable  ·  /pp sandbox mod to toggle raid leader/officer status.|r\n")
+        banner:SetText("|cFFFFD100SANDBOX ACTIVE — simulating raid leader. Roster, session, and loot changes are NOT saved to disk.\nUse /pp sandbox to disable  ·  /pp sandbox mod to toggle raid leader/officer status.|r\n")
         scroll:AddChild(banner)
     end
 
@@ -743,7 +743,7 @@ function PP:DrawSettingsTab(container)
 
     local syncDesc = AceGUI:Create("Label")
     syncDesc:SetFullWidth(true)
-    syncDesc:SetText("Request a full roster and raid sync from any online officer in your current group.\n")
+    syncDesc:SetText("Request a full roster and session sync from any online officer in your current group.\n")
     scroll:AddChild(syncDesc)
 
     local syncGroup = AceGUI:Create("SimpleGroup")
@@ -787,7 +787,7 @@ function PP:DrawSettingsTab(container)
 
     -- Collect only custom (non-guild) roster keys
     local customKeys = {}
-    for gk in pairs(PP.db.global.guilds) do
+    for _, gk in ipairs(PP.Repo.Roster:GetAllGuildKeys()) do
         if PP:IsCustomRoster(gk) then
             customKeys[#customKeys + 1] = gk
         end
@@ -866,7 +866,7 @@ function PP:DrawSettingsTab(container)
 
     -- Collect guild (non-custom, non-sandbox) roster keys
     local guildKeys = {}
-    for gk in pairs(PP.db.global.guilds) do
+    for _, gk in ipairs(PP.Repo.Roster:GetAllGuildKeys()) do
         if not PP:IsCustomRoster(gk) and gk ~= "__sandbox__" then
             guildKeys[#guildKeys + 1] = gk
         end
@@ -963,7 +963,7 @@ function PP:DrawSettingsTab(container)
     local myGuild   = PP:GetPlayerGuild() or "|cFFAAAAAAnone|r"
     local officer   = PP:IsOfficerOrHigher() and "|cFF00FF00Yes|r" or "|cFFFF4400No|r"
     local canMod    = PP:CanModify()          and "|cFF00FF00Yes|r" or "|cFFFF4400No|r"
-    local gd        = PP:GetGuildData(guildKey)
+    local gd        = PP.Repo.Roster:GetData(guildKey)
     local rVer      = gd and gd.rosterVersion or 0
     local inGroup   = IsInGroup()             and "|cFF00FF00Yes|r" or "|cFFAAAAAA No|r"
 
@@ -988,7 +988,7 @@ function PP:DrawSettingsTab(container)
     local resetDesc = AceGUI:Create("Label")
     resetDesc:SetFullWidth(true)
     resetDesc:SetText(
-        "Reset clears all saved data for this character only (roster, raids, pending loot).\n"
+        "Reset clears all saved data for this character only (roster, sessions, pending loot).\n"
      .. "|cFFFF4400This cannot be undone.|r\n"
     )
     scroll:AddChild(resetDesc)
@@ -1012,7 +1012,7 @@ StaticPopupDialogs["PP_CONFIRM_REMOVE_PLAYER"] = {
     OnAccept = function()
         if PP._pendingRemovePlayer then
             PP._selectedRosterPlayer = nil
-            PP:RemoveFromRoster(PP._pendingRemovePlayer)
+            PP.Roster:Remove(PP._pendingRemovePlayer)
             PP._pendingRemovePlayer = nil
         end
     end,
@@ -1029,7 +1029,7 @@ StaticPopupDialogs["PP_CONFIRM_RANDOMIZE"] = {
     button1 = "Randomize",
     button2 = "Cancel",
     OnAccept = function()
-        PP:RandomizeRosterOrder()
+        PP.Roster:Randomize()
     end,
     timeout = 0,
     whileDead = true,
@@ -1041,7 +1041,7 @@ StaticPopupDialogs["PP_CONFIRM_CLEAR_ROSTER"] = {
     button1 = "Yes",
     button2 = "No",
     OnAccept = function()
-        PP:ClearRoster()
+        PP.Roster:Clear()
     end,
     timeout = 0,
     whileDead = true,
@@ -1114,25 +1114,24 @@ StaticPopupDialogs["PP_CONFIRM_DELETE_ROSTER"] = {
 }
 
 StaticPopupDialogs["PP_CONTINUE_RAID"] = {
-    text = "Pirates Plunder\n\nWould you like to continue the active raid?",
-    button1 = "Continue Raid",
-    button2 = "End Raid",
+    text = "Pirates Plunder\n\nWould you like to continue the active session?",
+    button1 = "Continue Session",
+    button2 = "End Session",
     OnAccept = function()
         local id = PP._pendingContinueRaidID
         if id then
             local gk = PP:GetActiveGuildKey()
-            local gd = PP:GetGuildData(gk)
-            if gd and gd.raids and gd.raids[id] then
-                gd.raids[id].leader = PP:GetPlayerFullName()
-                PP:Print("You are now leading the raid: " .. (gd.raids[id].name or id))
+            local gd = PP.Repo.Roster:GetData(gk)
+            if gd and gd.sessions and gd.sessions[id] then
+                gd.sessions[id].leader = PP:GetPlayerFullName()
+                PP:Print("You are now leading the session: " .. (gd.sessions[id].name or id))
             end
             PP._pendingContinueRaidID = nil
         end
     end,
     OnCancel = function()
         PP._pendingContinueRaidID = nil
-        PP:EndRaid()
-        PP:Print("Raid ended.")
+        PP.Session:End(PP.SESSION_END.OFFICER_ACTION)
     end,
     timeout = 0,
     whileDead = true,
@@ -1140,12 +1139,12 @@ StaticPopupDialogs["PP_CONTINUE_RAID"] = {
 }
 
 StaticPopupDialogs["PP_CONFIRM_DELETE_RAID"] = {
-    text = "Permanently delete this raid?\n\n|cFFFF4400All loot and boss records will be erased for you and all online raid members. This cannot be undone.|r",
+    text = "Permanently delete this session?\n\n|cFFFF4400All loot and boss records will be erased for you and all online raid members. This cannot be undone.|r",
     button1 = "Delete",
     button2 = "Cancel",
     OnAccept = function()
         if PP._pendingDeleteRaidID then
-            PP:DeleteRaid(PP._pendingDeleteRaidID)
+            PP.Session:Delete(PP._pendingDeleteRaidID)
             PP._pendingDeleteRaidID = nil
         end
     end,
