@@ -2,6 +2,7 @@
 -- Pirates Plunder – Guild Repository
 -- All access to per-guild saved data goes through this table.
 ---------------------------------------------------------------------------
+---@type PPAddon
 local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 
 PP.Repo        = PP.Repo or {}

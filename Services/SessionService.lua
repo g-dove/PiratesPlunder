@@ -2,6 +2,7 @@
 -- Pirates Plunder – Session Service
 -- Canonical session lifecycle management.
 ---------------------------------------------------------------------------
+---@type PPAddon
 local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 
 PP.Session = PP.Session or {}

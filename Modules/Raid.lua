@@ -3,6 +3,7 @@
 -- Session lifecycle has moved to Services/SessionService.lua.
 -- This file retains only the session history query helper.
 ---------------------------------------------------------------------------
+---@type PPAddon
 local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 
 ---------------------------------------------------------------------------

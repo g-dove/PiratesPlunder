@@ -1,6 +1,7 @@
 ---------------------------------------------------------------------------
 -- Pirates Plunder – Sync (AceComm messaging)
 ---------------------------------------------------------------------------
+---@type PPAddon
 local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 
 ---------------------------------------------------------------------------
@@ -292,6 +293,13 @@ function PP:HandleSyncFull(data, sender)
             end
             if incoming.activeSessionID then
                 local incomingID = incoming.activeSessionID
+                -- End any conflicting locally-active session before adopting the synced one.
+                local existingID = local_gd.activeSessionID
+                if existingID and existingID ~= incomingID
+                   and local_gd.sessions[existingID]
+                   and local_gd.sessions[existingID].active then
+                    PP.Session:End(PP.SESSION_END.SYNC_FULL, existingID, gk)
+                end
                 local_gd.activeSessionID = incomingID
                 -- Part 3: if we previously ended this session prematurely, restore it
                 if local_gd.sessions[incomingID] and not local_gd.sessions[incomingID].active then
@@ -338,6 +346,15 @@ function PP:HandleSessionCreate(data, sender)
     if not data or not data.raidID or not data.raid then return end
     local gk = data.guildKey or self:GetActiveGuildKey()
     local gd = PP.Repo.Roster:GetData(gk)
+    -- End any conflicting locally-active session before adopting the incoming one.
+    -- Guards against the race where two officers create sessions before either
+    -- receives the other's broadcast.
+    local existingID = gd.activeSessionID
+    if existingID and existingID ~= data.raidID
+       and gd.sessions[existingID]
+       and gd.sessions[existingID].active then
+        PP.Session:End(PP.SESSION_END.SYNC_RECEIVED, existingID, gk)
+    end
     gd.sessions[data.raidID] = data.raid
     gd.activeSessionID = data.raidID
     -- Adopt this guild key as active if we don't have one set

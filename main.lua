@@ -10,6 +10,7 @@ local PiratesPlunder = LibStub("AceAddon-3.0"):NewAddon("PiratesPlunder",
 
 NS.addon = PiratesPlunder
 _G.PiratesPlunder = PiratesPlunder -- global for module files
+---@type PPAddon
 local PP = PiratesPlunder          -- local alias used throughout this file
 
 -- Library references

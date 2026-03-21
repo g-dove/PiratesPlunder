@@ -4,6 +4,7 @@
 -- moved to Services/LootService.lua.
 -- This file retains loot utilities, queue management, and sync callbacks.
 ---------------------------------------------------------------------------
+---@type PPAddon
 local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 
 -- Maps an item's equipLoc string to the inventory slot ID(s) that hold it.

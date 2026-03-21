@@ -2,6 +2,7 @@
 -- Pirates Plunder – Roster Service
 -- All roster manipulation goes through this table.
 ---------------------------------------------------------------------------
+---@type PPAddon
 local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 
 PP.Roster = PP.Roster or {}

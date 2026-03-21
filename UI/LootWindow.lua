@@ -3,6 +3,7 @@
 --   1) Loot-master window  (/pploot, /ppl)  – post items, view responses, award
 --   2) Unified multi-item response popup – Need / Transmog / Pass per item
 ---------------------------------------------------------------------------
+---@type PPAddon
 local PP  = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 local AceGUI = PP.AceGUI
 

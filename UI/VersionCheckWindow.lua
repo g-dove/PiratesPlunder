@@ -1,6 +1,7 @@
 ---------------------------------------------------------------------------
 -- Pirates Plunder – Version Check Window
 ---------------------------------------------------------------------------
+---@type PPAddon
 local PP    = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 local AceGUI = PP.AceGUI
 

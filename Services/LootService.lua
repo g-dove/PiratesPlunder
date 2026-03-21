@@ -2,6 +2,7 @@
 -- Pirates Plunder – Loot Service
 -- All loot posting / cancellation / awarding logic goes through this table.
 ---------------------------------------------------------------------------
+---@type PPAddon
 local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 
 PP.Loot = PP.Loot or {}

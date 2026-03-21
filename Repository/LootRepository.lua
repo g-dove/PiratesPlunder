@@ -2,6 +2,7 @@
 -- Pirates Plunder – Loot Repository
 -- All runtime loot state access goes through this table.
 ---------------------------------------------------------------------------
+---@type PPAddon
 local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 
 PP.Repo      = PP.Repo or {}

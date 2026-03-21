@@ -1,6 +1,7 @@
 ---------------------------------------------------------------------------
 -- Pirates Plunder – Dev/utility slash-command handlers
 ---------------------------------------------------------------------------
+---@type PPAddon
 local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 
 PP._commandGroups = PP._commandGroups or {}

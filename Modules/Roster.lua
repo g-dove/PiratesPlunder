@@ -3,6 +3,7 @@
 -- All roster manipulation has moved to Services/RosterService.lua.
 -- This file retains only the boss-kill event handler.
 ---------------------------------------------------------------------------
+---@type PPAddon
 local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 
 ---------------------------------------------------------------------------
