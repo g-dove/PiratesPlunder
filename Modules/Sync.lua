@@ -456,6 +456,7 @@ function PP:HandleLootAward(data, sender)
         self.lootPopups[data.key] = nil
     end
     PP.Repo.Loot:ClearEntry(data.key)
+    PP.Repo.Loot:Save()
     self:RefreshLootMasterWindow()
     self:RefreshLootResponseFrame()
     self:RefreshMainWindow()
@@ -550,6 +551,7 @@ end
 function PP:HandleLootCancel(data, sender)
     if not data or not data.key then return end
     PP.Repo.Loot:ClearEntry(data.key)
+    PP.Repo.Loot:Save()
     if self.lootPopups[data.key] then
         self.lootPopups[data.key]:Hide()
         self.lootPopups[data.key] = nil

@@ -204,8 +204,6 @@ function PiratesPlunder:OnEnable()
             or nil
     end
 
-    self:CheckActiveRaid()
-
     -- Hook alt+right-click on items to auto-post to loot window
     self:InstallAltRightClickHook()
 end
@@ -657,9 +655,10 @@ end
 
 function PiratesPlunder:OnGroupLeft()
     if PP.Repo.Roster:HasActiveSession() then
-        -- Leaving a raid group may be a zone transition, not a true group leave.
-        -- Defer the session end for 70 seconds; OnPlayerEnteringWorld will cancel
-        -- it if the player is still in the group after loading.
+        -- GROUP_LEFT fires when the server removes the player from the group,
+        -- which happens on disconnect. Defer the session end to give the player
+        -- time to reconnect; OnGroupRosterUpdate or OnPlayerEnteringWorld will
+        -- cancel the deferred end if they rejoin within the window.
         if IsInRaid() then
             local _, id = PP.Repo.Roster:GetActiveSession()
             local activeGuildKey = self:GetActiveGuildKey()
@@ -673,7 +672,7 @@ function PiratesPlunder:OnGroupLeft()
                     self.db.global.pendingSessionEnd = nil
                     self._pendingSessionEndTimer = nil
                 end
-            end, 70)
+            end, 30)
             -- Do NOT wipe pendingLoot or clear activeSessionID yet
             return
         end
@@ -699,6 +698,12 @@ function PiratesPlunder:CompletePendingSessionEnd()
         PP.Session:End(PP.SESSION_END.LEFT_GROUP)
         self:RefreshMainWindow()
         self:RefreshLootMasterWindow()
+        -- If we are somehow still in a group (e.g. disconnect timer fired just
+        -- before reconnect), request a sync immediately so HandleSyncFull can
+        -- reactivate the session before the player notices.
+        if IsInGroup() then
+            self:ScheduleTimer(function() self:RequestSync() end, 1)
+        end
     end
     -- Reset active guild to own guild
     self._activeGuildKey = self:GetPlayerGuild() or nil
@@ -812,7 +817,11 @@ function PiratesPlunder:OnPlayerEnteringWorld(_, isInitialLogin, isReloadingUi)
             -- Not guilded but in a group – sync immediately
             self:ScheduleTimer(function() self:RequestSync() end, 5)
         end
-        -- Restore cached loot and verify against loot master
-        self:ScheduleTimer(function() PP.Loot:Restore() end, 4)
+        -- Restore cached loot, verify against loot master, then check for stale
+        -- session state now that group membership is accurate.
+        self:ScheduleTimer(function()
+            PP.Loot:Restore()
+            self:CheckActiveRaid()
+        end, 4)
     end
 end

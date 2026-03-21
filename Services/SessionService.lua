@@ -180,7 +180,14 @@ function PP.Session:CheckLeaderPresent()
             break
         end
     end
-    if leaderStillLeading then return end
+    if leaderStillLeading then
+        -- Original leader is back / still present; cancel any pending end timer.
+        if PP._pendingLeaderLeftTimer then
+            PP:CancelTimer(PP._pendingLeaderLeftTimer)
+            PP._pendingLeaderLeftTimer = nil
+        end
+        return
+    end
 
     -- Original leader is gone. Find the new raid leader (rank == 2).
     local newLeader = nil
@@ -194,12 +201,35 @@ function PP.Session:CheckLeaderPresent()
 
     local me = PP:GetPlayerFullName()
     if newLeader and newLeader == me then
+        -- A new leader has been found; cancel any pending end timer.
+        if PP._pendingLeaderLeftTimer then
+            PP:CancelTimer(PP._pendingLeaderLeftTimer)
+            PP._pendingLeaderLeftTimer = nil
+        end
         -- Show the continuation prompt to the new session leader
         PP._pendingContinueRaidID = id
         StaticPopup_Show("PP_CONTINUE_RAID")
     elseif not newLeader then
-        -- No raid leader at all; end the session immediately
-        PP.Session:End(PP.SESSION_END.LEADER_LEFT)
+        -- No raid leader visible yet. During a promotion there is a brief window
+        -- where no player holds rank 2. Defer the end for 5 seconds so a normal
+        -- leader transition does not accidentally kill the session.
+        if not PP._pendingLeaderLeftTimer then
+            PP._pendingLeaderLeftTimer = PP:ScheduleTimer(function()
+                PP._pendingLeaderLeftTimer = nil
+                -- Re-check: a new leader may have appeared since the timer was set.
+                local stillNoLeader = true
+                for i = 1, GetNumGroupMembers() do
+                    local _, rank = GetRaidRosterInfo(i)
+                    if rank == 2 then
+                        stillNoLeader = false
+                        break
+                    end
+                end
+                if stillNoLeader then
+                    PP.Session:End(PP.SESSION_END.LEADER_LEFT)
+                end
+            end, 5)
+        end
     end
     -- If someone else is the new leader, their client handles the prompt
 end

@@ -21,6 +21,10 @@ table.insert(PP._commandGroups, function(input)
         return true
 
     elseif input == "session end" then
+        if not PP:CanModify() then
+            PP:Print("Only officers can end a session.")
+            return true
+        end
         PP.Session:End(PP.SESSION_END.OFFICER_ACTION)
         return true
     end
