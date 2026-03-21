@@ -258,6 +258,8 @@ function PPLootService:PostAll() end
 ---@field _commandGroups function[]
 ---@field _sandbox      boolean
 ---@field _sandboxMod   boolean
+---@field _currentTradePartner string|nil
+---@field _currentTradeSlotted table|nil
 local PPAddon = {}
 
 -- main.lua ----------------------------------------------------------------

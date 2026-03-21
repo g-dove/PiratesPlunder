@@ -248,7 +248,7 @@ end
 ---------------------------------------------------------------------------
 function PiratesPlunder:GetFullName(name)
     if not name then return nil end
-    if not name:find("-") then
+    if not string.find(name, "-", 1, true) then
         local _, realm = UnitFullName("player")
         realm = realm or GetRealmName():gsub("%s+", "")
         name = name .. "-" .. realm
