@@ -14,7 +14,7 @@ function PP:GetRaidHistory()
         list[#list + 1] = {
             id        = id,
             name      = raid.name,
-            startTime = raid.startTime,
+            startTime = raid.startTime or raid.startedAt or 0,
             endTime   = raid.endTime,
             leader    = raid.leader,
             active    = raid.active,

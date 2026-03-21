@@ -217,6 +217,7 @@ end
 -- Moved from PP:ExpressInterest() in Loot.lua.
 ---------------------------------------------------------------------------
 function PP.Loot:SubmitResponse(key, response)
+    if not PP.Repo.Loot:GetEntry(key) then return end
     local me = PP:GetPlayerFullName()
     local score = 0
     local roster = PP.Repo.Roster:GetRoster()
