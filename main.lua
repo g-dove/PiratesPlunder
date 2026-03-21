@@ -488,30 +488,27 @@ function PiratesPlunder:IsOfficerOrHigher()
     return self._isOfficer == true
 end
 
-function PiratesPlunder:IsRaidLeaderOrAssist()
-    if self._sandbox then return true end
-    if not IsInRaid() then return false end
+-- Returns the current player's raid rank (2=leader, 1=assist, 0=member), or -1 if not in raid.
+function PiratesPlunder:GetMyRaidRank()
+    if not IsInRaid() then return -1 end
     local me = self:GetPlayerFullName()
     for i = 1, GetNumGroupMembers() do
         local name, rank = GetRaidRosterInfo(i)
         if name and self:GetFullName(name) == me then
-            return rank >= 1   -- 2 = leader, 1 = assistant
+            return rank
         end
     end
-    return false
+    return -1
+end
+
+function PiratesPlunder:IsRaidLeaderOrAssist()
+    if self._sandbox then return true end
+    return self:GetMyRaidRank() >= 1
 end
 
 function PiratesPlunder:IsRaidLeader()
     if self._sandbox then return true end
-    if not IsInRaid() then return false end
-    local me = self:GetPlayerFullName()
-    for i = 1, GetNumGroupMembers() do
-        local name, rank = GetRaidRosterInfo(i)
-        if name and self:GetFullName(name) == me then
-            return rank == 2   -- 2 = leader only
-        end
-    end
-    return false
+    return self:GetMyRaidRank() == 2
 end
 
 function PiratesPlunder:CanModify()
@@ -561,6 +558,12 @@ function PiratesPlunder:CheckActiveRaid()
         self:RefreshLootResponseFrame()
         self:RefreshLootMasterWindow()
     end
+end
+
+-- Register a WoW frame so it can be dismissed with the ESC key.
+function PiratesPlunder:RegisterEscFrame(frame, frameName)
+    _G[frameName] = frame.frame
+    tinsert(UISpecialFrames, frameName)
 end
 
 -- Generate a unique key from an item link + timestamp + monotonic index.
@@ -738,10 +741,9 @@ function PiratesPlunder:OnStartLootRoll(_, rollID)
     if not PP.Repo.Roster:HasActiveSession() then return end
     -- Leaders and officers roll normally
     if self:IsRaidLeader() then return end
-    local _, _, _, quality = GetLootRollItemInfo(rollID)
+    local _, name, _, quality = GetLootRollItemInfo(rollID)
     if quality and quality >= 4 then  -- 4 = Epic, 5 = Legendary, …
         RollOnLoot(rollID, 0)  -- 0 = Pass
-        local _, name = GetLootRollItemInfo(rollID)
         self:Print("|cFFFF4400Auto-passed|r " .. (name or "item") .. " (epic+ auto-pass)")
     end
 end

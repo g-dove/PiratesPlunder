@@ -7,6 +7,26 @@ local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 PP.Roster = PP.Roster or {}
 
 ---------------------------------------------------------------------------
+-- Private helpers
+---------------------------------------------------------------------------
+
+-- Bump version, broadcast, and redraw after any roster mutation.
+local function CommitRosterChange()
+    PP.Repo.Roster:BumpRosterVersion()
+    PP:BroadcastRoster()
+    PP:RefreshMainWindow()
+end
+
+-- Build a new roster entry table from a normalised fullName.
+local function NewEntry(fullName)
+    return {
+        name  = PP:GetShortName(fullName),
+        realm = fullName:match("-(.+)$") or "",
+        score = 0,
+    }
+end
+
+---------------------------------------------------------------------------
 -- Add(fullName)
 -- Moved from PP:AddToRoster() in Roster.lua.
 ---------------------------------------------------------------------------
@@ -21,14 +41,8 @@ function PP.Roster:Add(fullName)
         PP:Print(PP:GetShortName(fullName) .. " is already in the roster.")
         return
     end
-    roster[fullName] = {
-        name  = PP:GetShortName(fullName),
-        realm = fullName:match("-(.+)$") or "",
-        score = 0,
-    }
-    PP.Repo.Roster:BumpRosterVersion()
-    PP:BroadcastRoster()
-    PP:RefreshMainWindow()
+    roster[fullName] = NewEntry(fullName)
+    CommitRosterChange()
 end
 
 ---------------------------------------------------------------------------
@@ -42,9 +56,7 @@ function PP.Roster:Remove(fullName)
     end
     fullName = PP:GetFullName(fullName)
     PP.Repo.Roster:GetRoster()[fullName] = nil
-    PP.Repo.Roster:BumpRosterVersion()
-    PP:BroadcastRoster()
-    PP:RefreshMainWindow()
+    CommitRosterChange()
 end
 
 ---------------------------------------------------------------------------
@@ -64,9 +76,7 @@ function PP.Roster:SetScore(fullName, newScore)
     end
     newScore = tonumber(newScore) or 0
     roster[fullName].score = newScore
-    PP.Repo.Roster:BumpRosterVersion()
-    PP:BroadcastRoster()
-    PP:RefreshMainWindow()
+    CommitRosterChange()
     PP:Print(PP:GetShortName(fullName) .. " score set to " .. newScore)
 end
 
@@ -97,10 +107,8 @@ function PP.Roster:Randomize()
         roster[fullName].score = #names - idx + 1
     end
 
-    PP.Repo.Roster:BumpRosterVersion()
     PP:Print("Roster order randomized!")
-    PP:BroadcastRoster()
-    PP:RefreshMainWindow()
+    CommitRosterChange()
 end
 
 ---------------------------------------------------------------------------
@@ -113,10 +121,8 @@ function PP.Roster:Clear()
         return
     end
     wipe(PP.Repo.Roster:GetRoster())
-    PP.Repo.Roster:BumpRosterVersion()
     PP:Print("Roster cleared.")
-    PP:BroadcastRoster()
-    PP:RefreshMainWindow()
+    CommitRosterChange()
 end
 
 ---------------------------------------------------------------------------
@@ -134,13 +140,7 @@ function PP.Roster:AutoPopulate()
             local fullName = PP:GetFullName(name .. (realm and realm ~= "" and ("-" .. realm) or ""))
             local roster = PP.Repo.Roster:GetRoster()
             if not roster[fullName] then
-                local shortName = PP:GetShortName(fullName)
-                local realmPart = fullName:match("-(.+)$") or ""
-                roster[fullName] = {
-                    name  = shortName,
-                    realm = realmPart,
-                    score = 0,
-                }
+                roster[fullName] = NewEntry(fullName)
             end
         end
     end
@@ -165,9 +165,7 @@ function PP.Roster:AddScoreToRaidMembers(amount)
             end
         end
     end
-    PP.Repo.Roster:BumpRosterVersion()
-    PP:BroadcastRoster()
-    PP:RefreshMainWindow()
+    CommitRosterChange()
 end
 
 ---------------------------------------------------------------------------

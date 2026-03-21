@@ -43,9 +43,7 @@ function PP:CreateMainWindow()
     self.mainWindow = f
 
     -- Make ESC close this window
-    local frameName = "PPMainWindowFrame"
-    _G[frameName] = f.frame
-    tinsert(UISpecialFrames, frameName)
+    PP:RegisterEscFrame(f, "PPMainWindowFrame")
 
     local tabGroup = AceGUI:Create("TabGroup")
     tabGroup:SetLayout("Fill")

@@ -42,9 +42,7 @@ function PP:CreateLootMasterWindow()
     self.lootMasterWindow = f
 
     -- Make ESC close this window
-    local frameName = "PPLootMasterFrame"
-    _G[frameName] = f.frame
-    tinsert(UISpecialFrames, frameName)
+    PP:RegisterEscFrame(f, "PPLootMasterFrame")
 
     local scroll = AceGUI:Create("ScrollFrame")
     scroll:SetFullWidth(true)

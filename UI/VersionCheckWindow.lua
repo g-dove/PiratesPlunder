@@ -51,9 +51,7 @@ function PP:ShowVersionCheckWindow()
     end)
     PP._versionCheckWindow = f
 
-    local frameName = "PPVersionCheckFrame"
-    _G[frameName] = f.frame
-    tinsert(UISpecialFrames, frameName)
+    PP:RegisterEscFrame(f, "PPVersionCheckFrame")
 
     local scroll = AceGUI:Create("ScrollFrame")
     scroll:SetFullWidth(true)
