@@ -30,6 +30,7 @@ end
 -- 10-second fallback to show the response popup if no reply arrives.
 ---------------------------------------------------------------------------
 function PP.Loot:_requestStateSync()
+    if PP._lootStateVerifyPending then return end
     if not IsInGroup() then
         PP:ShowLootResponseFrameIfNeeded()
         return
