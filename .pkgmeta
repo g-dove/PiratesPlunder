@@ -1,6 +1,7 @@
 package-as: PiratesPlunder
 
-changelog-file: CHANGELOG.md
+changelog-from: CHANGELOG.md
+changelog-type: markdown
 
 ignore:
   - .vscode
