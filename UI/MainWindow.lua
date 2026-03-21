@@ -1131,7 +1131,6 @@ StaticPopupDialogs["PP_CONTINUE_RAID"] = {
     OnCancel = function()
         PP._pendingContinueRaidID = nil
         PP.Session:End(PP.SESSION_END.OFFICER_ACTION)
-        PP:Print("Session ended.")
     end,
     timeout = 0,
     whileDead = true,
