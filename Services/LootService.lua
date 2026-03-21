@@ -112,6 +112,7 @@ end
 -- Moved from PP:CancelLoot() in Loot.lua.
 ---------------------------------------------------------------------------
 function PP.Loot:Cancel(key)
+    if not PP:CanPostLoot() then return end
     if not PP.Repo.Loot:GetEntry(key) then return end
     PP.Repo.Loot:ClearEntry(key)
 
@@ -126,6 +127,7 @@ end
 -- Moved from PP:AwardItem() in Loot.lua.
 ---------------------------------------------------------------------------
 function PP.Loot:Award(key, fullName, free)
+    if not PP:CanPostLoot() then return end
     local entry = PP.Repo.Loot:GetEntry(key)
     if not entry then return end
 

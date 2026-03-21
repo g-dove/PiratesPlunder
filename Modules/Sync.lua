@@ -191,7 +191,12 @@ function PP:SendFullSync(target)
     for gk, gd in pairs(self.db.global.guilds) do
         guilds[gk] = gd
     end
-    self:SendAddonMessage(PP.MSG.SYNC_FULL, { guilds = guilds }, target)
+    self:SendAddonMessage(PP.MSG.SYNC_FULL, {
+        guilds       = guilds,
+        raidSettings = {
+            autoPassEpicRolls = self.db.global.autoPassEpicRolls,
+        },
+    }, target)
 end
 
 ---------------------------------------------------------------------------
@@ -237,73 +242,81 @@ function PP:HandleSyncFull(data, sender)
         if gk ~= myGuild and gk ~= activeKey and not self.db.global.guilds[gk] then
             -- (do nothing – ignore this guild's data entirely)
         else
-        local local_gd = PP.Repo.Roster:GetData(gk)
-        -- Roster: take higher version
-        if incoming.rosterVersion and incoming.rosterVersion > local_gd.rosterVersion then
-            local_gd.roster        = incoming.roster or local_gd.roster
-            local_gd.rosterVersion = incoming.rosterVersion
-        end
-        -- Sessions: merge (add unknown, update known if incoming has more data)
-        if incoming.sessions then
-            for id, session in pairs(incoming.sessions) do
-                local local_session = local_gd.sessions[id]
-                if not local_session then
-                    -- Only add if we have no tombstone for this session
-                    if not (local_gd.deletedSessions and local_gd.deletedSessions[id]) then
-                        local_gd.sessions[id] = session
-                    end
-                else
-                    if session.items and #session.items > #(local_session.items or {}) then
-                        local_session.items = session.items
-                    end
-                    if session.bosses and #session.bosses > #(local_session.bosses or {}) then
-                        local_session.bosses = session.bosses
-                    end
-                    if session.endTime and not local_session.endTime then
-                        local_session.endTime = session.endTime
-                        local_session.active  = false
+            local local_gd = PP.Repo.Roster:GetData(gk)
+            -- Roster: take higher version
+            if incoming.rosterVersion and incoming.rosterVersion > local_gd.rosterVersion then
+                local_gd.roster        = incoming.roster or local_gd.roster
+                local_gd.rosterVersion = incoming.rosterVersion
+            end
+            -- Sessions: merge (add unknown, update known if incoming has more data)
+            if incoming.sessions then
+                for id, session in pairs(incoming.sessions) do
+                    local local_session = local_gd.sessions[id]
+                    if not local_session then
+                        -- Only add if we have no tombstone for this session
+                        if not (local_gd.deletedSessions and local_gd.deletedSessions[id]) then
+                            local_gd.sessions[id] = session
+                        end
+                    else
+                        if session.items and #session.items > #(local_session.items or {}) then
+                            local_session.items = session.items
+                        end
+                        if session.bosses and #session.bosses > #(local_session.bosses or {}) then
+                            local_session.bosses = session.bosses
+                        end
+                        if session.endTime and not local_session.endTime then
+                            local_session.endTime = session.endTime
+                            local_session.active  = false
+                        end
                     end
                 end
             end
-        end
 
-        -- Tombstones: apply deletions from the sender that we haven't seen yet
-        if incoming.deletedSessions then
-            if not local_gd.deletedSessions then local_gd.deletedSessions = {} end
-            for sessionID, tombVer in pairs(incoming.deletedSessions) do
-                if not local_gd.deletedSessions[sessionID] then
-                    -- We haven't recorded this deletion yet – apply it
-                    local_gd.sessions[sessionID] = nil
-                    local_gd.deletedSessions[sessionID] = tombVer
-                    -- Advance our version so future syncs from us carry the tombstone
-                    if tombVer > local_gd.rosterVersion then
-                        local_gd.rosterVersion = tombVer
+            -- Tombstones: apply deletions from the sender that we haven't seen yet
+            if incoming.deletedSessions then
+                if not local_gd.deletedSessions then local_gd.deletedSessions = {} end
+                for sessionID, tombVer in pairs(incoming.deletedSessions) do
+                    if not local_gd.deletedSessions[sessionID] then
+                        -- We haven't recorded this deletion yet – apply it
+                        local_gd.sessions[sessionID] = nil
+                        local_gd.deletedSessions[sessionID] = tombVer
+                        -- Advance our version so future syncs from us carry the tombstone
+                        if tombVer > local_gd.rosterVersion then
+                            local_gd.rosterVersion = tombVer
+                        end
+                        if local_gd.activeSessionID == sessionID then
+                            PP.Session:End(PP.SESSION_END.SYNC_FULL, sessionID, gk)
+                        end
                     end
-                    if local_gd.activeSessionID == sessionID then
-                        PP.Session:End(PP.SESSION_END.SYNC_FULL, sessionID, gk)
+                end
+            end
+            if incoming.activeSessionID then
+                local incomingID = incoming.activeSessionID
+                local_gd.activeSessionID = incomingID
+                -- Part 3: if we previously ended this session prematurely, restore it
+                if local_gd.sessions[incomingID] and not local_gd.sessions[incomingID].active then
+                    local_gd.sessions[incomingID].active  = true
+                    local_gd.sessions[incomingID].endTime = nil
+                end
+                -- Cancel any deferred session end that referenced this session
+                if self.db.global.pendingSessionEnd
+                    and self.db.global.pendingSessionEnd.sessionID == incomingID then
+                    self.db.global.pendingSessionEnd = nil
+                    if self._pendingSessionEndTimer then
+                        self:CancelTimer(self._pendingSessionEndTimer)
+                        self._pendingSessionEndTimer = nil
                     end
                 end
             end
         end
-        if incoming.activeSessionID then
-            local incomingID = incoming.activeSessionID
-            local_gd.activeSessionID = incomingID
-            -- Part 3: if we previously ended this session prematurely, restore it
-            if local_gd.sessions[incomingID] and not local_gd.sessions[incomingID].active then
-                local_gd.sessions[incomingID].active  = true
-                local_gd.sessions[incomingID].endTime = nil
-            end
-            -- Cancel any deferred session end that referenced this session
-            if self.db.global.pendingSessionEnd
-                and self.db.global.pendingSessionEnd.sessionID == incomingID then
-                self.db.global.pendingSessionEnd = nil
-                if self._pendingSessionEndTimer then
-                    self:CancelTimer(self._pendingSessionEndTimer)
-                    self._pendingSessionEndTimer = nil
-                end
-            end
+    end
+    -- Apply raid settings carried in the sync payload.  RAID_SETTINGS broadcast
+    -- is the primary path but can lose the race with loot rolls on reconnect;
+    -- this acts as a reliable fallback since only officers respond to SYNC_REQUEST.
+    if data.raidSettings then
+        if data.raidSettings.autoPassEpicRolls ~= nil then
+            self.db.global.autoPassEpicRolls = data.raidSettings.autoPassEpicRolls
         end
-        end -- else (guild key is known/relevant)
     end
     self:RefreshMainWindow()
 end
