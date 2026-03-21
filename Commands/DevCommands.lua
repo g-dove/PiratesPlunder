@@ -12,6 +12,8 @@ table.insert(PP._commandGroups, function(input)
         PP:Print("/pp version (or /pp v) – Check addon versions across the raid")
         PP:Print("/pp sandbox (or /pp s) – Toggle sandbox mode")
         PP:Print("/pp sandbox mod (or /pp s m) – Toggle canModify override in sandbox")
+        PP:Print("/pp session – Show or manage the active loot session")
+        PP:Print("/pp roster – Add, remove, clear, or randomize roster entries")
         PP:Print("/pp status – Show officer detection info")
         PP:Print("/pp bagdebug – Diagnose alt+right-click bag hook")
         return true

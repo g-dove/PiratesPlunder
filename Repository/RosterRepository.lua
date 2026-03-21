@@ -60,11 +60,6 @@ end
 -- HasActiveSession()
 ---------------------------------------------------------------------------
 function PP.Repo.Roster:HasActiveSession()
-    -- In sandbox, the fake session is always active
-    if PP._sandbox then
-        return PP._sandboxData ~= nil
-            and PP._sandboxData.sessions["sandbox_raid"] ~= nil
-    end
     local gd = self:GetData(PP:GetActiveGuildKey())
     if not gd then return false end
     local id = gd.activeSessionID

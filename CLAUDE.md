@@ -41,6 +41,7 @@ guilds[guildKey] = {
   deletedSessions: {}  -- tombstone set to prevent re-syncing deletions
 }
 pendingLootCache: {}   -- survives UI reloads
+pendingTradesCache: {} -- pending trade deliveries, survives UI reloads
 ```
 
 Guild keys: real guild names use the guild name as key; unguilded/custom rosters use `__custom__:Name`. The `__sandbox__` key is used during sandbox mode.
