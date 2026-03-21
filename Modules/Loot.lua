@@ -262,6 +262,7 @@ function PP:SetLootTransmog(key, allow)
     local entry = PP.Repo.Loot:GetEntry(key)
     if not entry then return end
     entry.allowTransmog = allow
+    PP.Repo.Loot:Save()
     self:SendAddonMessage(PP.MSG.LOOT_UPDATE, { key = key, allowTransmog = allow })
     self:RefreshLootMasterWindow()
     self:RefreshLootResponseFrame()

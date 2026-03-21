@@ -469,7 +469,6 @@ function PP:HandleLootAward(data, sender)
         self.lootPopups[data.key] = nil
     end
     PP.Repo.Loot:ClearEntry(data.key)
-    PP.Repo.Loot:Save()
     self:RefreshLootMasterWindow()
     self:RefreshLootResponseFrame()
     self:RefreshMainWindow()
@@ -489,6 +488,7 @@ function PP:HandleLootUpdate(data)
     if entry then
         if data.allowTransmog ~= nil then
             entry.allowTransmog = data.allowTransmog
+            PP.Repo.Loot:Save()
         end
         self:RefreshLootResponseFrame()
         self:RefreshLootMasterWindow()
@@ -552,7 +552,6 @@ function PP:HandleLootStateReply(data)
         -- "pending": leave local entry as-is
     end
     if changed then
-        PP.Repo.Loot:Save()
         self:RefreshLootResponseFrame()
         self:RefreshLootMasterWindow()
     end
@@ -564,7 +563,6 @@ end
 function PP:HandleLootCancel(data, sender)
     if not data or not data.key then return end
     PP.Repo.Loot:ClearEntry(data.key)
-    PP.Repo.Loot:Save()
     if self.lootPopups[data.key] then
         self.lootPopups[data.key]:Hide()
         self.lootPopups[data.key] = nil

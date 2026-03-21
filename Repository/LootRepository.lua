@@ -16,10 +16,12 @@ end
 
 function PP.Repo.Loot:SetEntry(key, entry)
     PP.pendingLoot[key] = entry
+    PP.Repo.Loot:Save()
 end
 
 function PP.Repo.Loot:ClearEntry(key)
     PP.pendingLoot[key] = nil
+    PP.Repo.Loot:Save()
 end
 
 function PP.Repo.Loot:WipeAll()

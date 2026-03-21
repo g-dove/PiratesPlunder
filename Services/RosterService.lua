@@ -151,6 +151,7 @@ end
 -- Moved from PP:AddScoreToRaidMembers() in Roster.lua.
 ---------------------------------------------------------------------------
 function PP.Roster:AddScoreToRaidMembers(amount)
+    if not PP:CanModify() then return end
     amount = amount or 1
     if not IsInRaid() then return end
     local roster = PP.Repo.Roster:GetRoster()

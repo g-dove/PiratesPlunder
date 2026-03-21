@@ -15,7 +15,7 @@ table.insert(PP._commandGroups, function(input)
         end
         return true
 
-    elseif input:match("^session new") then
+    elseif input == "session new" or input:match("^session new%s+") then
         local name = input:match("^session new%s+(.+)$")
         PP.Session:Create(name)
         return true

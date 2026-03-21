@@ -104,7 +104,6 @@ function PP.Loot:Post(itemLink)
     PP:ShowLootResponseFrame()
 
     PP:Print("Posted for distribution: " .. itemLink)
-    PP.Repo.Loot:Save()
     PP:RefreshLootMasterWindow()
 end
 
@@ -118,7 +117,6 @@ function PP.Loot:Cancel(key)
     PP.Repo.Loot:ClearEntry(key)
 
     PP:SendAddonMessage(PP.MSG.LOOT_CANCEL, { key = key })
-    PP.Repo.Loot:Save()
     PP:RefreshLootMasterWindow()
     PP:RefreshLootResponseFrame()
 end
@@ -206,7 +204,6 @@ function PP.Loot:Award(key, fullName, free)
     PP.Repo.Loot:ClearEntry(key)
 
     PP:Print(entry.itemLink .. " awarded to " .. shortName)
-    PP.Repo.Loot:Save()
     PP:RefreshLootMasterWindow()
     PP:RefreshMainWindow()
     PP:RefreshLootResponseFrame()
