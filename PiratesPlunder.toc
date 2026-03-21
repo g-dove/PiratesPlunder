@@ -2,6 +2,8 @@
 ## Title: Pirates Plunder
 ## Author: Lucidify
 ## Version: 0.3.3
+## X-Curse-Project-ID: 1483035
+## X-Wago-ID: L6J90xNv
 ## Category-enUS: Loot
 ## Category-deDE: Beute
 ## Category-esES: Botín
