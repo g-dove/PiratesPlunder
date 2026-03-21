@@ -696,8 +696,6 @@ function PiratesPlunder:CompletePendingSessionEnd()
 
     if PP.Repo.Roster:HasActiveSession() then
         PP.Session:End(PP.SESSION_END.LEFT_GROUP)
-        self:RefreshMainWindow()
-        self:RefreshLootMasterWindow()
         -- If we are somehow still in a group (e.g. disconnect timer fired just
         -- before reconnect), request a sync immediately so HandleSyncFull can
         -- reactivate the session before the player notices.
