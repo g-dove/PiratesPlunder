@@ -50,9 +50,9 @@ Session records include an additive `endReason` field (nil on old records) set w
 
 ### Repository Layer (`Repository/`)
 
-Wraps all DB reads and writes. No business logic lives here. **Sandbox routing is exclusively in `PP.Repo.Roster:GetData()`** — all other methods call it rather than branching on `_sandbox` individually.
+Wraps all DB reads and writes. No business logic lives here. **Sandbox routing is exclusively in `PP.Repo.Roster:GetData()`** — all other methods call it rather than branching on `_sandbox` individually. `EnsureData()` wraps `GetData()` and auto-creates the guild entry if nil — use it for write-path callers; use `GetData` for read-path callers that should handle absence.
 
-- **RosterRepository.lua** (`PP.Repo.Roster`) — all `db.global.guilds` access: `GetData`, `GetRoster`, `GetSessions`, `GetActiveSession`, `HasActiveSession`, `GetAllGuildKeys`, `SetActiveSessionID`, `ClearActiveSessionID`, `MarkSessionEnded`, `AddTombstone`, `BumpRosterVersion`, `GetRosterVersion`
+- **RosterRepository.lua** (`PP.Repo.Roster`) — all `db.global.guilds` access: `GetData`, `EnsureData`, `GetRoster`, `GetSessions`, `GetActiveSession`, `HasActiveSession`, `GetAllGuildKeys`, `SetActiveSessionID`, `ClearActiveSessionID`, `MarkSessionEnded`, `AddTombstone`, `BumpRosterVersion`, `GetRosterVersion`
 - **LootRepository.lua** (`PP.Repo.Loot`) — wraps `PP.pendingLoot` / `PP.lootQueue` / `PP.pendingTrades` runtime tables: `GetEntry`, `SetEntry`, `ClearEntry`, `WipeAll`, `GetAll`, `GetQueue`, `AddToQueue`, `GetPendingTrades`, `RemovePendingTrade`, `Save`, `Restore`
 
 ### Service Layer (`Services/`)

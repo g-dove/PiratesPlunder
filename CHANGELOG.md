@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2] - 2026-03-21
+### Changed
+- Clarified `GetData` vs `EnsureData` API in `PP.Repo.Roster`: `EnsureData` auto-creates the guild entry if missing; `GetData` returns nil for absent entries
+
+### Fixed
+- Added nil-guards after `GetData()` calls in Sync.lua, LootService, SessionService, and main.lua to prevent crashes when guild data is absent
+
 ## [0.3.1] - 2026-03-21
 ### Changed
 - Sync improvements for roster and session state propagation
