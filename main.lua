@@ -90,9 +90,10 @@ function PiratesPlunder:OnInitialize()
         end
         if self.db.global.raids and next(self.db.global.raids) ~= nil then
             local gd = PP.Repo.Roster:GetData(migrateKey)
+            gd.sessions = gd.sessions or {}
             for id, raid in pairs(self.db.global.raids) do
-                gd.raids[id] = raid
-                if raid.active then gd.activeRaidID = id end
+                gd.sessions[id] = raid
+                if raid.active then gd.activeSessionID = id end
             end
         end
         self.db.global.roster       = nil
@@ -421,8 +422,10 @@ function PiratesPlunder:DisableSandbox()
     self._sandbox     = false
     self._sandboxData = nil
     self._sandboxModOverride = nil
-    -- Discard any loot state accumulated during the sandbox session
-    PP.Repo.Loot:WipeAll()
+    -- Discard any loot state accumulated during the sandbox session.
+    -- Wipe runtime tables directly (no Save()) so the pre-sandbox
+    -- pendingLootCache in the DB is not overwritten.
+    wipe(self.pendingLoot)
     wipe(self.pendingTrades)
     self.db.global.pendingTradesCache = {}
     wipe(self.lootQueue)
