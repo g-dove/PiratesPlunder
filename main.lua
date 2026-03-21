@@ -826,5 +826,10 @@ function PiratesPlunder:OnPlayerEnteringWorld(_, isInitialLogin, isReloadingUi)
             PP.Loot:Restore()
             self:CheckActiveRaid()
         end, 4)
+    elseif not self.db.global.pendingSessionEnd then
+        -- Ordinary zone transition: re-verify pending loot in case AWARD/CANCEL
+        -- was missed during the loading screen. Restore() skips the DB read when
+        -- pendingLoot is non-empty and is a no-op when there is nothing pending.
+        self:ScheduleTimer(function() PP.Loot:Restore() end, 3)
     end
 end
