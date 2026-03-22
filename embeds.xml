@@ -22,5 +22,8 @@
   <!-- Minimap icon -->
   <Script file="Libs\LibDataBroker-1.1\LibDataBroker-1.1.lua"/>
   <Include file="Libs\LibDBIcon-1.0\lib.xml"/>
+
+  <!-- Window positioning -->
+  <Script file="Libs\LibWindow-1.1\LibWindow-1.1.lua"/>
 </Ui>
 	
