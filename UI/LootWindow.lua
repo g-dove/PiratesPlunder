@@ -802,28 +802,27 @@ function PP:RefreshLootBars()
     local yOffset = padTop
     local count = 0
 
+    local LibWindow = LibStub("LibWindow-1.1")
+
     for key, entry in pairs(PP.Repo.Loot:GetAll()) do
         if not entry.awarded then
             count = count + 1
             local myResponse = entry.responses[me] and entry.responses[me].response or nil
-            local capturedEntry = entry
 
             local bar = CreateFrame("Button", nil, f)
             bar:SetSize(barW, barH)
             bar:SetPoint("TOPLEFT", f, "TOPLEFT", padX, -yOffset)
             bar:SetHighlightTexture("Interface\\Buttons\\UI-Listbox-Highlight")
+            bar:RegisterForDrag("LeftButton")
+            bar:SetScript("OnDragStart", function() f:StartMoving() end)
+            bar:SetScript("OnDragStop",  function()
+                f:StopMovingOrSizing()
+                LibWindow.SavePosition(f)
+            end)
             bar:SetScript("OnClick", function()
                 f:Hide()
                 PP:ShowLootResponseFrame()
             end)
-            bar:SetScript("OnEnter", function(self)
-                if capturedEntry.itemLink then
-                    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-                    GameTooltip:SetHyperlink(capturedEntry.itemLink)
-                    GameTooltip:Show()
-                end
-            end)
-            bar:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
             -- Item icon
             local iconTex = (entry.itemID and C_Item.GetItemIconByID(entry.itemID))
