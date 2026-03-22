@@ -504,8 +504,8 @@ end
 -- chronological across reloads; use index as a tiebreaker within the
 -- same second (_lootKeyIndex resets on reload so index alone is not stable).
 local function lootEntrySortLess(a, b)
-    local ta, ia = a.key:match(":(%d+):(%d+)$")
-    local tb, ib = b.key:match(":(%d+):(%d+)$")
+    local ta, ia = a.key:match(":([%d%.]+):(%d+)$")
+    local tb, ib = b.key:match(":([%d%.]+):(%d+)$")
     ta, ia = tonumber(ta) or 0, tonumber(ia) or 0
     tb, ib = tonumber(tb) or 0, tonumber(ib) or 0
     if ta == tb then return ia < ib end
