@@ -42,6 +42,7 @@ guilds[guildKey] = {
 }
 pendingLootCache: {}   -- survives UI reloads
 pendingTradesCache: {} -- pending trade deliveries, survives UI reloads
+minimapIcon: {}        -- LibDBIcon position/visibility persistence
 ```
 
 Guild keys: real guild names use the guild name as key; unguilded/custom rosters use `__custom__:Name`. The `__sandbox__` key is used during sandbox mode.
@@ -85,9 +86,12 @@ Slash dispatch uses a registration table. Each file inserts a handler function i
 ### UI (`UI/`)
 
 - **MainWindow.lua** — Three-tab window: Roster (view/edit scores), Raids (history), Settings. All guild data access via `PP.Repo.Roster:*`. Uses lib-st (ScrollTable) for tabular data.
+- **MinimapIcon.lua** — Registers LibDataBroker-1.1 data object and LibDBIcon-1.0 minimap button. `PP:SetupMinimapIcon()` called from `OnInitialize`. Left-click toggles the main window. Custom icon: place `Media/icon.tga` (64×64 px, 32-bit Targa with alpha) in the addon root; falls back to a default WoW map icon if absent.
 - **LootWindow.lua** — Two distinct windows: *Loot Master Window* (`/pp loot`) and *Response Popup* (shown to all raid members). All loot state via `PP.Repo.Loot:*`.
 - **AwardedLootWindow.lua** — Per-player loot history popup, opened from the Roster tab
 - **VersionCheckWindow.lua** — Query and display addon versions of all raid members
+
+The `Media/` directory holds addon artwork. `Media/icon.tga` is the minimap button icon (64×64 px Targa, 32-bit with alpha). WoW texture path: `"Interface\\AddOns\\PiratesPlunder\\Media\\icon"` (no extension in path strings).
 
 ### Key Runtime State
 

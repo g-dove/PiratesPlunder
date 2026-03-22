@@ -47,6 +47,12 @@
 ---@field STARTUP_CHECK  string
 ---@field RESET          string
 
+---@class PPMinimapIconConfig
+---@field hide         boolean       whether the button is hidden
+---@field minimapPos   number|nil    angle position set by LibDBIcon at runtime
+---@field minimapRadius number|nil   radius offset set by LibDBIcon at runtime
+---@field minimapAngle number|nil    alias used by some LibDBIcon versions
+
 ---------------------------------------------------------------------------
 -- Repository layer – Repository/RosterRepository.lua
 ---------------------------------------------------------------------------
@@ -249,7 +255,7 @@ function PPLootService:PostAll() end
 ---@field Session       PPSession
 ---@field Roster        PPRosterService
 ---@field Loot          PPLootService
----@field db            table                    AceDB-3.0 instance
+---@field db            table                    AceDB-3.0 instance; db.global.minimapIcon is PPMinimapIconConfig
 ---@field pendingLoot   table<string, table>
 ---@field pendingTrades table[]
 ---@field lootQueue     string[]
@@ -611,6 +617,12 @@ function PPAddon:RefreshAwardedLootWindow() end
 ---@param container table
 ---@param fullName  string
 function PPAddon:DrawAwardedLootContent(container, fullName) end
+
+-- UI/MinimapIcon.lua -------------------------------------------------------
+
+--- Registers the LibDataBroker data object and LibDBIcon minimap button.
+--- Called once at the end of OnInitialize after self.db is available.
+function PPAddon:SetupMinimapIcon() end
 
 -- UI/VersionCheckWindow.lua -----------------------------------------------
 
