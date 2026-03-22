@@ -227,11 +227,13 @@ function PP:HandleSyncRequest(sender, data)
         myRaidItems = myRaidItems + #(session.items or {})
     end
     -- Respond if roster OR raid-award records are behind.
-    -- Also respond if we have an active session the requester is missing —
-    -- LEADER_LEFT ends sessions without changing versions, so version parity
-    -- alone is not enough to detect that the requester needs a restore.
-    local myActiveID = gd.activeSessionID
-    local sessionMismatch = myActiveID and (data.activeSessionID ~= myActiveID)
+    -- Also respond if active session IDs differ — LEADER_LEFT ends sessions
+    -- without changing versions, so version parity alone is not enough to
+    -- detect that the requester needs a restore.
+    local myActiveID        = gd.activeSessionID
+    local requesterActiveID = data and data.activeSessionID
+    local sessionMismatch   = (myActiveID ~= requesterActiveID)
+                           and (myActiveID ~= nil or requesterActiveID ~= nil)
     if requesterVersion >= gd.rosterVersion and requesterRaidItems >= myRaidItems
        and not sessionMismatch then return end
     -- Random jitter 0.3-1.5 s so multiple officers don't reply simultaneously
