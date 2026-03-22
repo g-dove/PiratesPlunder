@@ -105,8 +105,10 @@ function PP.Session:Create(raidName)
     }
     PP.Repo.Roster:SetActiveSessionID(gk, sessionID)
 
-    -- Snapshot current members
+    
     PP.Roster:AutoPopulate()
+
+    -- this does f all right now, why tf are we storing this?
     local session = gd.sessions[sessionID]
     for i = 1, GetNumGroupMembers() do
         local name = GetRaidRosterInfo(i)

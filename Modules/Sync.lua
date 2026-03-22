@@ -176,17 +176,21 @@ function PP:RequestSync()
     if not IsInGroup() then return end
     local gk = self:GetActiveGuildKey()
     local gd = PP.Repo.Roster:GetData(gk)
-    if not gd then return end
-    -- Count session award records we have so peers can detect a gap
-    local raidItemCount = 0
-    for _, session in pairs(gd.sessions or {}) do
-        raidItemCount = raidItemCount + #(session.items or {})
+    -- If we have no local record at all, send floor values so any officer with
+    -- data for this guild key will see us as behind and respond with SYNC_FULL.
+    local rosterVersion   = gd and gd.rosterVersion   or -1
+    local activeSessionID = gd and gd.activeSessionID or nil
+    local raidItemCount   = 0
+    if gd then
+        for _, session in pairs(gd.sessions or {}) do
+            raidItemCount = raidItemCount + #(session.items or {})
+        end
     end
     self:SendAddonMessage(PP.MSG.SYNC_REQUEST, {
         guildKey        = gk,
-        rosterVersion   = gd.rosterVersion,
+        rosterVersion   = rosterVersion,
         raidItemCount   = raidItemCount,
-        activeSessionID = gd.activeSessionID,
+        activeSessionID = activeSessionID,
     })
 end
 
@@ -225,6 +229,9 @@ function PP:HandleSyncRequest(sender, data)
     if not myGuild or gk ~= myGuild then return end
     local gd = PP.Repo.Roster:GetData(gk)
     if not gd then return end
+    -- Only respond when we have an active session — without one there is nothing
+    -- meaningful to restore and we avoid syncing roster data to non-members.
+    if not gd.activeSessionID then return end
     local requesterVersion   = data and data.rosterVersion   or -1
     local requesterRaidItems = data and data.raidItemCount   or -1
     -- Count our own awarded items across all sessions
@@ -387,9 +394,16 @@ function PP:HandleSessionCreate(data, sender)
     end
     gd.sessions[data.raidID] = data.raid
     gd.activeSessionID = data.raidID
-    -- Adopt this guild key as active if we don't have one set
-    if not self._activeGuildKey then
+    -- When in a raid, always adopt the session's guild key — guards against the
+    -- timing race where GetRaidLeaderGuild() returned nil in OnGroupRosterUpdate
+    -- before unit data had populated.  Outside a raid, only set if unset.
+    if IsInRaid() or not self._activeGuildKey then
         self._activeGuildKey = gk
+    end
+    -- If we have no roster data yet (fresh install / cleared vars), request a
+    -- sync so the officer sends us the full roster now that a session is active.
+    if gd.rosterVersion == 0 then
+        self:ScheduleTimer(function() self:RequestSync() end, 1)
     end
     self:Print("Session started: " .. (data.raid.name or data.raidID))
     self:RefreshMainWindow()

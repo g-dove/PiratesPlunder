@@ -633,16 +633,13 @@ function PiratesPlunder:OnGroupRosterUpdate()
         end
     end
 
-    -- When in a raid, prefer the raid leader's guild as the active key — but
-    -- only if we already have data for it.  If not, fall back to our own guild
-    -- so we don't start operating on a fresh empty record for an unknown guild.
-    -- HandleSessionCreate will set the key correctly once a session is broadcast.
+    -- When in a raid, always track the raid leader's guild as the active key.
+    -- This ensures RequestSync uses the correct guild key even before any local
+    -- record exists, allowing SYNC_FULL to create and populate it on arrival.
     if IsInRaid() then
         local leaderGuild = self:GetRaidLeaderGuild()
-        if leaderGuild and self.db.global.guilds[leaderGuild] then
+        if leaderGuild then
             self._activeGuildKey = leaderGuild
-        else
-            self._activeGuildKey = self:GetPlayerGuild() or nil
         end
     end
 
