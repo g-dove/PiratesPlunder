@@ -734,6 +734,11 @@ function PP:RefreshLootResponseFrame()
     container:SetHeight(yOffset)
     -- Do NOT call f:Show() here — only ShowLootResponseFrame() should open the frame.
     -- Refreshing should never reopen a frame the player has minimised.
+
+    -- Keep bars in sync when visible but response frame is not
+    if self.lootBarsFrame and self.lootBarsFrame:IsShown() then
+        self:RefreshLootBars()
+    end
 end
 
 -- Legacy redirect — still called from Sync.lua HandleLootPost
@@ -788,12 +793,11 @@ function PP:RefreshLootBars()
     local f = self.lootBarsFrame
     if not f then return end
 
-    -- Clear old bars
-    local kids = { f:GetChildren() }
-    for _, child in ipairs(kids) do
-        child:Hide()
-        child:SetParent(nil)
-    end
+    local LibWindow = LibStub("LibWindow-1.1")
+
+    -- Collect and hide all existing bars without unparenting (preserves the pool)
+    local bars = { f:GetChildren() }
+    for _, bar in ipairs(bars) do bar:Hide() end
 
     local me = self:GetPlayerFullName()
     local barW, barH = 200, 22
@@ -802,65 +806,76 @@ function PP:RefreshLootBars()
     local yOffset = padTop
     local count = 0
 
-    local LibWindow = LibStub("LibWindow-1.1")
-
     for key, entry in pairs(PP.Repo.Loot:GetAll()) do
         if not entry.awarded then
             count = count + 1
             local myResponse = entry.responses[me] and entry.responses[me].response or nil
 
-            local bar = CreateFrame("Button", nil, f)
-            bar:SetSize(barW, barH)
-            bar:SetPoint("TOPLEFT", f, "TOPLEFT", padX, -yOffset)
-            bar:SetHighlightTexture("Interface\\Buttons\\UI-Listbox-Highlight")
-            bar:RegisterForDrag("LeftButton")
-            bar:SetScript("OnDragStart", function() f:StartMoving() end)
-            bar:SetScript("OnDragStop",  function()
-                f:StopMovingOrSizing()
-                LibWindow.SavePosition(f)
-            end)
-            bar:SetScript("OnClick", function()
-                f:Hide()
-                PP:ShowLootResponseFrame()
-            end)
+            -- Reuse existing bar or create a new one
+            local bar = bars[count]
+            if not bar then
+                bar = CreateFrame("Button", nil, f)
+                bar:SetSize(barW, barH)
+                bar:SetHighlightTexture("Interface\\Buttons\\UI-Listbox-Highlight")
+                bar:RegisterForDrag("LeftButton")
+                bar:SetScript("OnDragStart", function() f:StartMoving() end)
+                bar:SetScript("OnDragStop", function()
+                    f:StopMovingOrSizing()
+                    LibWindow.SavePosition(f)
+                end)
+                bar:SetScript("OnClick", function()
+                    f:Hide()
+                    PP:ShowLootResponseFrame()
+                end)
+                local icon = bar:CreateTexture(nil, "OVERLAY")
+                icon:SetSize(16, 16)
+                icon:SetPoint("LEFT", bar, "LEFT", 2, 0)
+                icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+                bar._icon = icon
+                local nameStr = bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                nameStr:SetPoint("LEFT", bar, "LEFT", 22, 0)
+                nameStr:SetPoint("RIGHT", bar, "RIGHT", -42, 0)
+                nameStr:SetJustifyH("LEFT")
+                nameStr:SetJustifyV("MIDDLE")
+                bar._nameStr = nameStr
+                local respStr = bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                respStr:SetPoint("RIGHT", bar, "RIGHT", -2, 0)
+                respStr:SetJustifyH("RIGHT")
+                respStr:SetJustifyV("MIDDLE")
+                bar._respStr = respStr
+                bars[count] = bar
+            end
 
-            -- Item icon
+            -- Update position
+            bar:ClearAllPoints()
+            bar:SetPoint("TOPLEFT", f, "TOPLEFT", padX, -yOffset)
+
+            -- Update icon
             local iconTex = (entry.itemID and C_Item.GetItemIconByID(entry.itemID))
             if not iconTex and entry.itemLink then
                 local _, _, _, _, tex = GetItemInfoInstant(entry.itemLink)
                 iconTex = tex
             end
             if iconTex then
-                local icon = bar:CreateTexture(nil, "OVERLAY")
-                icon:SetSize(16, 16)
-                icon:SetPoint("LEFT", bar, "LEFT", 2, 0)
-                icon:SetTexture(iconTex)
-                icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+                bar._icon:SetTexture(iconTex)
+                bar._icon:Show()
+            else
+                bar._icon:Hide()
             end
 
-            -- Item name
-            local nameStr = bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-            nameStr:SetPoint("LEFT", bar, "LEFT", 22, 0)
-            nameStr:SetPoint("RIGHT", bar, "RIGHT", -42, 0)
-            nameStr:SetJustifyH("LEFT")
-            nameStr:SetJustifyV("MIDDLE")
-            nameStr:SetText(entry.itemLink or "Unknown")
+            -- Update name and response label
+            bar._nameStr:SetText(entry.itemLink or "Unknown")
 
-            -- Response label (right-aligned, colour-coded)
-            local respStr = bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-            respStr:SetPoint("RIGHT", bar, "RIGHT", -2, 0)
-            respStr:SetJustifyH("RIGHT")
-            respStr:SetJustifyV("MIDDLE")
             if myResponse == PP.RESPONSE.NEED then
-                respStr:SetText("|cFF00FF00Need|r")
+                bar._respStr:SetText("|cFF00FF00Need|r")
             elseif myResponse == PP.RESPONSE.MINOR then
-                respStr:SetText("|cFF00CCFFMinor|r")
+                bar._respStr:SetText("|cFF00CCFFMinor|r")
             elseif myResponse == PP.RESPONSE.TRANSMOG then
-                respStr:SetText("|cFFFF8800Tmog|r")
+                bar._respStr:SetText("|cFFFF8800Tmog|r")
             elseif myResponse == PP.RESPONSE.PASS then
-                respStr:SetText("|cFF888888Pass|r")
+                bar._respStr:SetText("|cFF888888Pass|r")
             else
-                respStr:SetText("|cFFFFFF00?|r")
+                bar._respStr:SetText("|cFFFFFF00?|r")
             end
 
             bar:Show()
