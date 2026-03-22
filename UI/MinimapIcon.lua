@@ -17,11 +17,16 @@ function PP:SetupMinimapIcon()
         OnClick = function(_, button)
             if button == "LeftButton" then
                 PP:ToggleMainWindow()
+            elseif button == "RightButton" and PP:CanViewLootMaster() then
+                PP:ToggleLootMasterWindow()
             end
         end,
         OnTooltipShow = function(tooltip)
             tooltip:AddLine("Pirates Plunder")
             tooltip:AddLine("|cFFAAAAAA Left-click to open/close|r")
+            if PP:CanViewLootMaster() then
+                tooltip:AddLine("|cFFAAAAAA Right-click for loot master|r")
+            end
         end,
     })
 
