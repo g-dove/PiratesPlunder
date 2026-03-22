@@ -535,13 +535,13 @@ function PP:ShowLootResponseFrame()
     -- Add to UISpecialFrames so ESC hides the frame
     tinsert(UISpecialFrames, "PPLootResponseFrame")
 
-    -- When the frame is hidden (by ESC or the X button), show the reopen button
+    -- When the frame is hidden (by ESC or the X button), show the loot bars
     f:SetScript("OnHide", function()
-        PP:ShowLootReopenButton()
+        PP:ShowLootBars()
     end)
 
-    -- Hide reopen btn whenever the full response frame is visible
-    self:HideLootReopenButton()
+    -- Hide bars whenever the full response frame is visible
+    self:HideLootBars()
 
     -- Title
     local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
@@ -724,7 +724,7 @@ function PP:RefreshLootResponseFrame()
 
     if itemCount == 0 then
         f:Hide()
-        self:HideLootReopenButton()
+        self:HideLootBars()
         return
     end
 
@@ -750,60 +750,146 @@ function PP:CloseLootPopups()
     if self.lootResponseFrame then
         self.lootResponseFrame:Hide()
     end
-    self:HideLootReopenButton()
+    self:HideLootBars()
 end
 
 -- =========================================================================
---  REOPEN BUTTON  – tiny floating button shown when response frame is hidden
---  but items are still pending distribution
+--  LOOT BARS  – per-item floating bars shown when response frame is hidden
+--  but items are still pending distribution. All bars share one draggable
+--  anchor; position is persisted via LibWindow-1.1.
 -- =========================================================================
 
-function PP:CreateLootReopenButton()
-    if self.lootReopenBtn then return end
-    local f = CreateFrame("Frame", "PPLootReopenFrame", UIParent, "BackdropTemplate")
-    f:SetSize(164, 46)  -- larger than the button so there's a draggable border
-    f:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -230, 100)
+function PP:CreateLootBarsFrame()
+    if self.lootBarsFrame then return end
+    local LibWindow = LibStub("LibWindow-1.1")
+
+    local f = CreateFrame("Frame", "PPLootBarsFrame", UIParent, "BackdropTemplate")
+    f:SetSize(212, 12)  -- height grows dynamically in RefreshLootBars
     f:SetFrameStrata("DIALOG")
     f:SetClampedToScreen(true)
-    f:SetMovable(true)
     f:EnableMouse(true)
-    f:RegisterForDrag("LeftButton")
-    f:SetScript("OnDragStart", f.StartMoving)
-    f:SetScript("OnDragStop",  f.StopMovingOrSizing)
     f:SetBackdrop({
         bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
         edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-        tile = true, tileSize = 32, edgeSize = 18,
-        insets = { left = 4, right = 4, top = 4, bottom = 4 },
+        tile = true, tileSize = 32, edgeSize = 14,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 },
     })
-    f:SetBackdropColor(0.05, 0.05, 0.05, 0.9)
+    f:SetBackdropColor(0.05, 0.05, 0.05, 0.85)
 
-    local btn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    btn:SetSize(128, 22)
-    btn:SetPoint("CENTER")
-    btn:SetText("|cFF33CCFF>>|r PP Loot")
-    btn:SetScript("OnClick", function()
-        f:Hide()
-        PP:ShowLootResponseFrame()
-    end)
+    LibWindow.RegisterConfig(f, PP.db.global.lootBarsAnchor)
+    LibWindow.MakeDraggable(f)
+    LibWindow.RestorePosition(f)
 
     f:Hide()
-    self.lootReopenBtn = f
+    self.lootBarsFrame = f
 end
 
-function PP:ShowLootReopenButton()
-    -- Only show if unawarded items are still pending
+function PP:RefreshLootBars()
+    local f = self.lootBarsFrame
+    if not f then return end
+
+    -- Clear old bars
+    local kids = { f:GetChildren() }
+    for _, child in ipairs(kids) do
+        child:Hide()
+        child:SetParent(nil)
+    end
+
+    local me = self:GetPlayerFullName()
+    local barW, barH = 200, 22
+    local padX, padTop, padBottom = 6, 6, 6
+    local barGap = 2
+    local yOffset = padTop
+    local count = 0
+
+    for key, entry in pairs(PP.Repo.Loot:GetAll()) do
+        if not entry.awarded then
+            count = count + 1
+            local myResponse = entry.responses[me] and entry.responses[me].response or nil
+            local capturedEntry = entry
+
+            local bar = CreateFrame("Button", nil, f)
+            bar:SetSize(barW, barH)
+            bar:SetPoint("TOPLEFT", f, "TOPLEFT", padX, -yOffset)
+            bar:SetHighlightTexture("Interface\\Buttons\\UI-Listbox-Highlight")
+            bar:SetScript("OnClick", function()
+                f:Hide()
+                PP:ShowLootResponseFrame()
+            end)
+            bar:SetScript("OnEnter", function(self)
+                if capturedEntry.itemLink then
+                    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                    GameTooltip:SetHyperlink(capturedEntry.itemLink)
+                    GameTooltip:Show()
+                end
+            end)
+            bar:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+            -- Item icon
+            local iconTex = (entry.itemID and C_Item.GetItemIconByID(entry.itemID))
+            if not iconTex and entry.itemLink then
+                local _, _, _, _, tex = GetItemInfoInstant(entry.itemLink)
+                iconTex = tex
+            end
+            if iconTex then
+                local icon = bar:CreateTexture(nil, "OVERLAY")
+                icon:SetSize(16, 16)
+                icon:SetPoint("LEFT", bar, "LEFT", 2, 0)
+                icon:SetTexture(iconTex)
+                icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+            end
+
+            -- Item name
+            local nameStr = bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            nameStr:SetPoint("LEFT", bar, "LEFT", 22, 0)
+            nameStr:SetPoint("RIGHT", bar, "RIGHT", -42, 0)
+            nameStr:SetJustifyH("LEFT")
+            nameStr:SetJustifyV("MIDDLE")
+            nameStr:SetText(entry.itemLink or "Unknown")
+
+            -- Response label (right-aligned, colour-coded)
+            local respStr = bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            respStr:SetPoint("RIGHT", bar, "RIGHT", -2, 0)
+            respStr:SetJustifyH("RIGHT")
+            respStr:SetJustifyV("MIDDLE")
+            if myResponse == PP.RESPONSE.NEED then
+                respStr:SetText("|cFF00FF00Need|r")
+            elseif myResponse == PP.RESPONSE.MINOR then
+                respStr:SetText("|cFF00CCFFMinor|r")
+            elseif myResponse == PP.RESPONSE.TRANSMOG then
+                respStr:SetText("|cFFFF8800Tmog|r")
+            elseif myResponse == PP.RESPONSE.PASS then
+                respStr:SetText("|cFF888888Pass|r")
+            else
+                respStr:SetText("|cFFFFFF00?|r")
+            end
+
+            bar:Show()
+            yOffset = yOffset + barH + barGap
+        end
+    end
+
+    if count == 0 then
+        f:Hide()
+        return
+    end
+
+    f:SetSize(212, yOffset - barGap + padBottom)
+end
+
+function PP:ShowLootBars()
     local hasItems = false
     for _, entry in pairs(PP.Repo.Loot:GetAll()) do
         if not entry.awarded then hasItems = true; break end
     end
     if not hasItems then return end
-    self:CreateLootReopenButton()
-    self.lootReopenBtn:Show()
+    self:CreateLootBarsFrame()
+    self:RefreshLootBars()
+    self.lootBarsFrame:Show()
 end
 
-function PP:HideLootReopenButton()
-    if self.lootReopenBtn then
-        self.lootReopenBtn:Hide()
+function PP:HideLootBars()
+    if self.lootBarsFrame then
+        self.lootBarsFrame:Hide()
     end
 end
