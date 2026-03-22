@@ -48,10 +48,10 @@
 ---@field RESET          string
 
 ---@class PPMinimapIconConfig
----@field hide         boolean       whether the button is hidden
----@field minimapPos   number|nil    angle position set by LibDBIcon at runtime
----@field minimapRadius number|nil   radius offset set by LibDBIcon at runtime
----@field minimapAngle number|nil    alias used by some LibDBIcon versions
+---@field hide              boolean       whether the button is hidden
+---@field minimapPos        number|nil    angle position around the minimap (written by LibDBIcon during drag)
+---@field lock              boolean|nil   when true, drag-to-reposition is disabled
+---@field showInCompartment boolean|nil   when true, button is also shown in the addon compartment
 
 ---------------------------------------------------------------------------
 -- Repository layer – Repository/RosterRepository.lua

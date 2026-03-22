@@ -4,8 +4,7 @@
 ---@type PPAddon
 local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 
-local ICON_CUSTOM  = "Interface\\AddOns\\PiratesPlunder\\Media\\icon"
-local ICON_DEFAULT = "Interface\\Icons\\inv_misc_map_01"
+local ICON_CUSTOM = "Interface\\AddOns\\PiratesPlunder\\Media\\icon"
 
 function PP:SetupMinimapIcon()
     local ldb  = LibStub("LibDataBroker-1.1")
