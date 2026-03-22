@@ -499,6 +499,19 @@ function PP:AddItemTooltip(frame, itemLink)
     end)
 end
 
+-- Stable sort for pending loot entries. Keys have the format
+-- "itemLink:timestamp:index". Sort primarily by timestamp so order is
+-- chronological across reloads; use index as a tiebreaker within the
+-- same second (_lootKeyIndex resets on reload so index alone is not stable).
+local function lootEntrySortLess(a, b)
+    local ta, ia = a.key:match(":([%d%.]+):(%d+)$")
+    local tb, ib = b.key:match(":([%d%.]+):(%d+)$")
+    ta, ia = tonumber(ta) or 0, tonumber(ia) or 0
+    tb, ib = tonumber(tb) or 0, tonumber(ib) or 0
+    if ta == tb then return ia < ib end
+    return ta < tb
+end
+
 -- =========================================================================
 --  UNIFIED MULTI-ITEM RESPONSE FRAME
 --  Shows ALL pending loot items. Players can respond or change their
@@ -506,6 +519,16 @@ end
 -- =========================================================================
 
 function PP:ShowLootResponseFrame()
+    -- Bail out early if there is nothing to show
+    local hasItems = false
+    for _, entry in pairs(PP.Repo.Loot:GetAll()) do
+        if not entry.awarded then hasItems = true; break end
+    end
+    if not hasItems then return end
+
+    -- Always hide bars first, regardless of whether the frame already exists
+    self:HideLootBars()
+
     if self.lootResponseFrame then
         self:RefreshLootResponseFrame()
         self.lootResponseFrame:Show()
@@ -535,13 +558,13 @@ function PP:ShowLootResponseFrame()
     -- Add to UISpecialFrames so ESC hides the frame
     tinsert(UISpecialFrames, "PPLootResponseFrame")
 
-    -- When the frame is hidden (by ESC or the X button), show the reopen button
+    -- When the frame is hidden (by ESC or the X button), show the loot bars.
+    -- _suppressLootBars suppresses this for programmatic hides (teardown paths).
     f:SetScript("OnHide", function()
-        PP:ShowLootReopenButton()
+        if not PP._suppressLootBars then
+            PP:ShowLootBars()
+        end
     end)
-
-    -- Hide reopen btn whenever the full response frame is visible
-    self:HideLootReopenButton()
 
     -- Title
     local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
@@ -608,123 +631,130 @@ function PP:RefreshLootResponseFrame()
     local frameWidth   = contentWidth + iconPad + 24   -- matching right margin
     f:SetWidth(frameWidth)
 
+    local allEntries = {}
     for key, entry in pairs(PP.Repo.Loot:GetAll()) do
         if not entry.awarded then
-            itemCount = itemCount + 1
-            local myResponse = entry.responses[me] and entry.responses[me].response or nil
-
-            -- Row frame for this item
-            local row = CreateFrame("Frame", nil, container)
-            row:SetSize(contentWidth, rowHeight)
-            row:SetPoint("TOPLEFT", container, "TOPLEFT", 0, -yOffset)
-
-            -- Item icon (with left padding)
-            local iconTex = (entry.itemID and C_Item.GetItemIconByID(entry.itemID))
-            if not iconTex and entry.itemLink then
-                local _, _, _, _, tex = GetItemInfoInstant(entry.itemLink)
-                iconTex = tex
-            end
-            if iconTex then
-                local icon = row:CreateTexture(nil, "OVERLAY")
-                icon:SetSize(iconWidth, iconWidth)
-                icon:SetPoint("TOPLEFT", row, "TOPLEFT", iconPad, -1)
-                icon:SetTexture(iconTex)
-                icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-            end
-
-            -- Item text: fixed height so buttons always sit below it
-            local itemText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-            itemText:SetPoint("TOPLEFT", row, "TOPLEFT", textX, 0)
-            itemText:SetWidth(contentWidth - textX)
-            itemText:SetHeight(textH)
-            itemText:SetJustifyH("LEFT")
-            itemText:SetJustifyV("TOP")
-            local displayText = entry.itemLink or "Unknown Item"
-            if myResponse then
-                local color = myResponse == PP.RESPONSE.NEED     and "|cFF00FF00"
-                           or myResponse == PP.RESPONSE.MINOR    and "|cFF00CCFF"
-                           or myResponse == PP.RESPONSE.TRANSMOG and "|cFFFF8800"
-                           or "|cFF888888"
-                displayText = displayText .. "  " .. color .. "[" .. myResponse .. "]|r"
-            end
-            itemText:SetText(displayText)
-
-            -- Tooltip on the item row
-            row:EnableMouse(true)
-            row:SetScript("OnEnter", function(self)
-                if entry.itemLink then
-                    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-                    GameTooltip:SetHyperlink(entry.itemLink)
-                    GameTooltip:Show()
-                end
-            end)
-            row:SetScript("OnLeave", function() GameTooltip:Hide() end)
-
-            -- Response buttons: anchored below the fixed text zone, never overlap it
-            local btnY = -(textH + btnGap)
-            local capturedKey = key
-
-            local needBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-            needBtn:SetSize(btnWidth, btnHeight)
-            needBtn:SetPoint("TOPLEFT", row, "TOPLEFT", textX, btnY)
-            needBtn:SetText("Need")
-            if myResponse == PP.RESPONSE.NEED then
-                needBtn:GetFontString():SetTextColor(0, 1, 0)
-            end
-            needBtn:SetScript("OnClick", function()
-                PP.Loot:SubmitResponse(capturedKey, PP.RESPONSE.NEED)
-            end)
-
-            local minorBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-            minorBtn:SetSize(btnWidth, btnHeight)
-            minorBtn:SetPoint("LEFT", needBtn, "RIGHT", 6, 0)
-            minorBtn:SetText("Minor")
-            if myResponse == PP.RESPONSE.MINOR then
-                minorBtn:GetFontString():SetTextColor(0, 0.8, 1)
-            end
-            minorBtn:SetScript("OnClick", function()
-                PP.Loot:SubmitResponse(capturedKey, PP.RESPONSE.MINOR)
-            end)
-
-            local showTmog = entry.allowTransmog ~= false
-
-            local tmogBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-            tmogBtn:SetSize(btnWidth, btnHeight)
-            tmogBtn:SetPoint("LEFT", minorBtn, "RIGHT", 6, 0)
-            tmogBtn:SetText("Transmog")
-            if myResponse == PP.RESPONSE.TRANSMOG then
-                tmogBtn:GetFontString():SetTextColor(1, 0.53, 0)
-            end
-            if not showTmog then
-                tmogBtn:Hide()
-            end
-            tmogBtn:SetScript("OnClick", function()
-                PP.Loot:SubmitResponse(capturedKey, PP.RESPONSE.TRANSMOG)
-            end)
-
-            local passBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-            passBtn:SetSize(btnWidth, btnHeight)
-            if showTmog then
-                passBtn:SetPoint("LEFT", tmogBtn, "RIGHT", 6, 0)
-            else
-                passBtn:SetPoint("LEFT", minorBtn, "RIGHT", 6, 0)
-            end
-            passBtn:SetText("Pass")
-            if myResponse == PP.RESPONSE.PASS then
-                passBtn:GetFontString():SetTextColor(0.5, 0.5, 0.5)
-            end
-            passBtn:SetScript("OnClick", function()
-                PP.Loot:SubmitResponse(capturedKey, PP.RESPONSE.PASS)
-            end)
-
-            row:Show()
-            yOffset = yOffset + rowHeight + 4
+            allEntries[#allEntries + 1] = { key = key, entry = entry }
         end
+    end
+    table.sort(allEntries, lootEntrySortLess)
+
+    for _, pair in ipairs(allEntries) do
+        local key, entry = pair.key, pair.entry
+        itemCount = itemCount + 1
+        local myResponse = entry.responses[me] and entry.responses[me].response or nil
+
+        -- Row frame for this item
+        local row = CreateFrame("Frame", nil, container)
+        row:SetSize(contentWidth, rowHeight)
+        row:SetPoint("TOPLEFT", container, "TOPLEFT", 0, -yOffset)
+
+        -- Item icon (with left padding)
+        local iconTex = (entry.itemID and C_Item.GetItemIconByID(entry.itemID))
+        if not iconTex and entry.itemLink then
+            local _, _, _, _, tex = GetItemInfoInstant(entry.itemLink)
+            iconTex = tex
+        end
+        if iconTex then
+            local icon = row:CreateTexture(nil, "OVERLAY")
+            icon:SetSize(iconWidth, iconWidth)
+            icon:SetPoint("TOPLEFT", row, "TOPLEFT", iconPad, -1)
+            icon:SetTexture(iconTex)
+            icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        end
+
+        -- Item text: fixed height so buttons always sit below it
+        local itemText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        itemText:SetPoint("TOPLEFT", row, "TOPLEFT", textX, 0)
+        itemText:SetWidth(contentWidth - textX)
+        itemText:SetHeight(textH)
+        itemText:SetJustifyH("LEFT")
+        itemText:SetJustifyV("TOP")
+        local displayText = entry.itemLink or "Unknown Item"
+        if myResponse then
+            local color = myResponse == PP.RESPONSE.NEED     and "|cFF00FF00"
+                       or myResponse == PP.RESPONSE.MINOR    and "|cFF00CCFF"
+                       or myResponse == PP.RESPONSE.TRANSMOG and "|cFFFF8800"
+                       or "|cFF888888"
+            displayText = displayText .. "  " .. color .. "[" .. myResponse .. "]|r"
+        end
+        itemText:SetText(displayText)
+
+        -- Tooltip on the item row
+        row:EnableMouse(true)
+        row:SetScript("OnEnter", function(self)
+            if entry.itemLink then
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                GameTooltip:SetHyperlink(entry.itemLink)
+                GameTooltip:Show()
+            end
+        end)
+        row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+        -- Response buttons: anchored below the fixed text zone, never overlap it
+        local btnY = -(textH + btnGap)
+        local capturedKey = key
+
+        local needBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+        needBtn:SetSize(btnWidth, btnHeight)
+        needBtn:SetPoint("TOPLEFT", row, "TOPLEFT", textX, btnY)
+        needBtn:SetText("Need")
+        if myResponse == PP.RESPONSE.NEED then
+            needBtn:GetFontString():SetTextColor(0, 1, 0)
+        end
+        needBtn:SetScript("OnClick", function()
+            PP.Loot:SubmitResponse(capturedKey, PP.RESPONSE.NEED)
+        end)
+
+        local minorBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+        minorBtn:SetSize(btnWidth, btnHeight)
+        minorBtn:SetPoint("LEFT", needBtn, "RIGHT", 6, 0)
+        minorBtn:SetText("Minor")
+        if myResponse == PP.RESPONSE.MINOR then
+            minorBtn:GetFontString():SetTextColor(0, 0.8, 1)
+        end
+        minorBtn:SetScript("OnClick", function()
+            PP.Loot:SubmitResponse(capturedKey, PP.RESPONSE.MINOR)
+        end)
+
+        local showTmog = entry.allowTransmog ~= false
+
+        local tmogBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+        tmogBtn:SetSize(btnWidth, btnHeight)
+        tmogBtn:SetPoint("LEFT", minorBtn, "RIGHT", 6, 0)
+        tmogBtn:SetText("Transmog")
+        if myResponse == PP.RESPONSE.TRANSMOG then
+            tmogBtn:GetFontString():SetTextColor(1, 0.53, 0)
+        end
+        if not showTmog then
+            tmogBtn:Hide()
+        end
+        tmogBtn:SetScript("OnClick", function()
+            PP.Loot:SubmitResponse(capturedKey, PP.RESPONSE.TRANSMOG)
+        end)
+
+        local passBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+        passBtn:SetSize(btnWidth, btnHeight)
+        if showTmog then
+            passBtn:SetPoint("LEFT", tmogBtn, "RIGHT", 6, 0)
+        else
+            passBtn:SetPoint("LEFT", minorBtn, "RIGHT", 6, 0)
+        end
+        passBtn:SetText("Pass")
+        if myResponse == PP.RESPONSE.PASS then
+            passBtn:GetFontString():SetTextColor(0.5, 0.5, 0.5)
+        end
+        passBtn:SetScript("OnClick", function()
+            PP.Loot:SubmitResponse(capturedKey, PP.RESPONSE.PASS)
+        end)
+
+        row:Show()
+        yOffset = yOffset + rowHeight + 4
     end
 
     if itemCount == 0 then
         f:Hide()
-        self:HideLootReopenButton()
+        self:HideLootBars()
         return
     end
 
@@ -734,6 +764,11 @@ function PP:RefreshLootResponseFrame()
     container:SetHeight(yOffset)
     -- Do NOT call f:Show() here — only ShowLootResponseFrame() should open the frame.
     -- Refreshing should never reopen a frame the player has minimised.
+
+    -- Keep bars in sync when visible but response frame is not
+    if self.lootBarsFrame and self.lootBarsFrame:IsShown() then
+        self:RefreshLootBars()
+    end
 end
 
 -- Legacy redirect — still called from Sync.lua HandleLootPost
@@ -748,62 +783,166 @@ function PP:CloseLootPopups()
     end
     wipe(self.lootPopups)
     if self.lootResponseFrame then
+        self._suppressLootBars = true
         self.lootResponseFrame:Hide()
+        self._suppressLootBars = nil
     end
-    self:HideLootReopenButton()
+    self:HideLootBars()
 end
 
 -- =========================================================================
---  REOPEN BUTTON  – tiny floating button shown when response frame is hidden
---  but items are still pending distribution
+--  LOOT BARS  – per-item floating bars shown when response frame is hidden
+--  but items are still pending distribution. All bars share one draggable
+--  anchor; position is persisted via LibWindow-1.1.
 -- =========================================================================
 
-function PP:CreateLootReopenButton()
-    if self.lootReopenBtn then return end
-    local f = CreateFrame("Frame", "PPLootReopenFrame", UIParent, "BackdropTemplate")
-    f:SetSize(164, 46)  -- larger than the button so there's a draggable border
-    f:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -230, 100)
+function PP:CreateLootBarsFrame()
+    if self.lootBarsFrame then return end
+    local LibWindow = LibStub("LibWindow-1.1")
+
+    local f = CreateFrame("Frame", "PPLootBarsFrame", UIParent, "BackdropTemplate")
+    f:SetSize(212, 12)  -- height grows dynamically in RefreshLootBars
     f:SetFrameStrata("DIALOG")
     f:SetClampedToScreen(true)
-    f:SetMovable(true)
     f:EnableMouse(true)
-    f:RegisterForDrag("LeftButton")
-    f:SetScript("OnDragStart", f.StartMoving)
-    f:SetScript("OnDragStop",  f.StopMovingOrSizing)
     f:SetBackdrop({
         bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
         edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-        tile = true, tileSize = 32, edgeSize = 18,
-        insets = { left = 4, right = 4, top = 4, bottom = 4 },
+        tile = true, tileSize = 32, edgeSize = 14,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 },
     })
-    f:SetBackdropColor(0.05, 0.05, 0.05, 0.9)
+    f:SetBackdropColor(0.05, 0.05, 0.05, 0.85)
 
-    local btn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    btn:SetSize(128, 22)
-    btn:SetPoint("CENTER")
-    btn:SetText("|cFF33CCFF>>|r PP Loot")
-    btn:SetScript("OnClick", function()
-        f:Hide()
-        PP:ShowLootResponseFrame()
-    end)
+    LibWindow.RegisterConfig(f, PP.db.global.lootBarsAnchor)
+    LibWindow.MakeDraggable(f)
+    LibWindow.RestorePosition(f)
 
     f:Hide()
-    self.lootReopenBtn = f
+    self.lootBarsFrame = f
 end
 
-function PP:ShowLootReopenButton()
-    -- Only show if unawarded items are still pending
+function PP:RefreshLootBars()
+    local f = self.lootBarsFrame
+    if not f then return end
+
+    local LibWindow = LibStub("LibWindow-1.1")
+
+    -- Collect and hide all existing bars without unparenting (preserves the pool)
+    local bars = { f:GetChildren() }
+    for _, bar in ipairs(bars) do bar:Hide() end
+
+    local me = self:GetPlayerFullName()
+    local barW, barH = 200, 22
+    local padX, padTop, padBottom = 6, 6, 6
+    local barGap = 2
+    local yOffset = padTop
+    local count = 0
+
+    local allEntries = {}
+    for key, entry in pairs(PP.Repo.Loot:GetAll()) do
+        if not entry.awarded then
+            allEntries[#allEntries + 1] = { key = key, entry = entry }
+        end
+    end
+    table.sort(allEntries, lootEntrySortLess)
+
+    for _, pair in ipairs(allEntries) do
+        local key, entry = pair.key, pair.entry
+        count = count + 1
+        local myResponse = entry.responses[me] and entry.responses[me].response or nil
+
+        -- Reuse existing bar or create a new one
+        local bar = bars[count]
+        if not bar then
+            bar = CreateFrame("Button", nil, f)
+            bar:SetSize(barW, barH)
+            bar:SetHighlightTexture("Interface\\Buttons\\UI-Listbox-Highlight")
+            bar:RegisterForDrag("LeftButton")
+            bar:SetScript("OnDragStart", function() f:StartMoving() end)
+            bar:SetScript("OnDragStop", function()
+                f:StopMovingOrSizing()
+                LibWindow.SavePosition(f)
+            end)
+            bar:SetScript("OnClick", function()
+                f:Hide()
+                PP:ShowLootResponseFrame()
+            end)
+            local icon = bar:CreateTexture(nil, "OVERLAY")
+            icon:SetSize(16, 16)
+            icon:SetPoint("LEFT", bar, "LEFT", 2, 0)
+            icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+            bar._icon = icon
+            local nameStr = bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            nameStr:SetPoint("LEFT", bar, "LEFT", 22, 0)
+            nameStr:SetPoint("RIGHT", bar, "RIGHT", -42, 0)
+            nameStr:SetJustifyH("LEFT")
+            nameStr:SetJustifyV("MIDDLE")
+            bar._nameStr = nameStr
+            local respStr = bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            respStr:SetPoint("RIGHT", bar, "RIGHT", -2, 0)
+            respStr:SetJustifyH("RIGHT")
+            respStr:SetJustifyV("MIDDLE")
+            bar._respStr = respStr
+            bars[count] = bar
+        end
+
+        -- Update position
+        bar:ClearAllPoints()
+        bar:SetPoint("TOPLEFT", f, "TOPLEFT", padX, -yOffset)
+
+        -- Update icon
+        local iconTex = (entry.itemID and C_Item.GetItemIconByID(entry.itemID))
+        if not iconTex and entry.itemLink then
+            local _, _, _, _, tex = GetItemInfoInstant(entry.itemLink)
+            iconTex = tex
+        end
+        if iconTex then
+            bar._icon:SetTexture(iconTex)
+            bar._icon:Show()
+        else
+            bar._icon:Hide()
+        end
+
+        -- Update name and response label
+        bar._nameStr:SetText(entry.itemLink or "Unknown")
+
+        if myResponse == PP.RESPONSE.NEED then
+            bar._respStr:SetText("|cFF00FF00Need|r")
+        elseif myResponse == PP.RESPONSE.MINOR then
+            bar._respStr:SetText("|cFF00CCFFMinor|r")
+        elseif myResponse == PP.RESPONSE.TRANSMOG then
+            bar._respStr:SetText("|cFFFF8800Tmog|r")
+        elseif myResponse == PP.RESPONSE.PASS then
+            bar._respStr:SetText("|cFF888888Pass|r")
+        else
+            bar._respStr:SetText("|cFFFFFF00?|r")
+        end
+
+        bar:Show()
+        yOffset = yOffset + barH + barGap
+    end
+
+    if count == 0 then
+        f:Hide()
+        return
+    end
+
+    f:SetSize(212, yOffset - barGap + padBottom)
+end
+
+function PP:ShowLootBars()
     local hasItems = false
     for _, entry in pairs(PP.Repo.Loot:GetAll()) do
         if not entry.awarded then hasItems = true; break end
     end
     if not hasItems then return end
-    self:CreateLootReopenButton()
-    self.lootReopenBtn:Show()
+    self:CreateLootBarsFrame()
+    self:RefreshLootBars()
+    self.lootBarsFrame:Show()
 end
 
-function PP:HideLootReopenButton()
-    if self.lootReopenBtn then
-        self.lootReopenBtn:Hide()
+function PP:HideLootBars()
+    if self.lootBarsFrame then
+        self.lootBarsFrame:Hide()
     end
 end

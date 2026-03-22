@@ -73,6 +73,8 @@ local defaults = {
         autoPassEpicRolls = false,
         -- LibDBIcon persists minimap button position/visibility here
         minimapIcon = { hide = false },
+        -- LibWindow-1.1 persists loot bars anchor position here
+        lootBarsAnchor = { point = "BOTTOMRIGHT", x = -230, y = 100 },
     },
     profile = {},
 }
@@ -153,7 +155,7 @@ function PiratesPlunder:OnInitialize()
     self.lootMasterWindow = nil
     self.lootPopups       = {}  -- key => frame
     self.lootResponseFrame = nil -- unified multi-item response popup
-    self.lootReopenBtn    = nil -- small reopen button shown when response frame is hidden
+    self.lootBarsFrame    = nil -- per-item bars shown when response frame is hidden
     self.awardedLootWindow = nil -- per-player awarded loot history window
     self._awardedLootTarget = nil -- fullName currently shown in the awarded loot window
     self._pendingDeleteRaidID = nil -- raidID pending delete confirmation
@@ -235,11 +237,15 @@ end
 
 function PiratesPlunder:SlashCommandResponse()
     local frameVisible  = self.lootResponseFrame and self.lootResponseFrame:IsShown()
-    local buttonVisible = self.lootReopenBtn and self.lootReopenBtn:IsShown()
-    if frameVisible or buttonVisible then
+    local barsVisible   = self.lootBarsFrame and self.lootBarsFrame:IsShown()
+    if frameVisible or barsVisible then
         -- Dismiss both (clear/dismiss path)
-        if self.lootResponseFrame then self.lootResponseFrame:Hide() end
-        self:HideLootReopenButton()
+        if self.lootResponseFrame then
+            self._suppressLootBars = true
+            self.lootResponseFrame:Hide()
+            self._suppressLootBars = nil
+        end
+        self:HideLootBars()
     else
         -- Reopen path
         self:ShowLootResponseFrame()
