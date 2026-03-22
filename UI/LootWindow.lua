@@ -506,6 +506,9 @@ end
 -- =========================================================================
 
 function PP:ShowLootResponseFrame()
+    -- Always hide bars first, regardless of whether the frame already exists
+    self:HideLootBars()
+
     if self.lootResponseFrame then
         self:RefreshLootResponseFrame()
         self.lootResponseFrame:Show()
@@ -542,9 +545,6 @@ function PP:ShowLootResponseFrame()
             PP:ShowLootBars()
         end
     end)
-
-    -- Hide bars whenever the full response frame is visible
-    self:HideLootBars()
 
     -- Title
     local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
@@ -617,11 +617,7 @@ function PP:RefreshLootResponseFrame()
             allEntries[#allEntries + 1] = { key = key, entry = entry }
         end
     end
-    table.sort(allEntries, function(a, b)
-        local ia = tonumber(a.key:match(":(%d+)$")) or 0
-        local ib = tonumber(b.key:match(":(%d+)$")) or 0
-        return ia < ib
-    end)
+    table.sort(allEntries, lootEntrySortLess)
 
     for _, pair in ipairs(allEntries) do
         local key, entry = pair.key, pair.entry
@@ -774,6 +770,19 @@ function PP:CloseLootPopups()
     self:HideLootBars()
 end
 
+-- Stable sort for pending loot entries. Keys have the format
+-- "itemLink:timestamp:index". Sort primarily by timestamp so order is
+-- chronological across reloads; use index as a tiebreaker within the
+-- same second (_lootKeyIndex resets on reload so index alone is not stable).
+local function lootEntrySortLess(a, b)
+    local ta, ia = a.key:match(":(%d+):(%d+)$")
+    local tb, ib = b.key:match(":(%d+):(%d+)$")
+    ta, ia = tonumber(ta) or 0, tonumber(ia) or 0
+    tb, ib = tonumber(tb) or 0, tonumber(ib) or 0
+    if ta == tb then return ia < ib end
+    return ta < tb
+end
+
 -- =========================================================================
 --  LOOT BARS  – per-item floating bars shown when response frame is hidden
 --  but items are still pending distribution. All bars share one draggable
@@ -828,11 +837,7 @@ function PP:RefreshLootBars()
             allEntries[#allEntries + 1] = { key = key, entry = entry }
         end
     end
-    table.sort(allEntries, function(a, b)
-        local ia = tonumber(a.key:match(":(%d+)$")) or 0
-        local ib = tonumber(b.key:match(":(%d+)$")) or 0
-        return ia < ib
-    end)
+    table.sort(allEntries, lootEntrySortLess)
 
     for _, pair in ipairs(allEntries) do
         local key, entry = pair.key, pair.entry
