@@ -535,9 +535,12 @@ function PP:ShowLootResponseFrame()
     -- Add to UISpecialFrames so ESC hides the frame
     tinsert(UISpecialFrames, "PPLootResponseFrame")
 
-    -- When the frame is hidden (by ESC or the X button), show the loot bars
+    -- When the frame is hidden (by ESC or the X button), show the loot bars.
+    -- _suppressLootBars suppresses this for programmatic hides (teardown paths).
     f:SetScript("OnHide", function()
-        PP:ShowLootBars()
+        if not PP._suppressLootBars then
+            PP:ShowLootBars()
+        end
     end)
 
     -- Hide bars whenever the full response frame is visible
@@ -608,118 +611,129 @@ function PP:RefreshLootResponseFrame()
     local frameWidth   = contentWidth + iconPad + 24   -- matching right margin
     f:SetWidth(frameWidth)
 
+    local allEntries = {}
     for key, entry in pairs(PP.Repo.Loot:GetAll()) do
         if not entry.awarded then
-            itemCount = itemCount + 1
-            local myResponse = entry.responses[me] and entry.responses[me].response or nil
-
-            -- Row frame for this item
-            local row = CreateFrame("Frame", nil, container)
-            row:SetSize(contentWidth, rowHeight)
-            row:SetPoint("TOPLEFT", container, "TOPLEFT", 0, -yOffset)
-
-            -- Item icon (with left padding)
-            local iconTex = (entry.itemID and C_Item.GetItemIconByID(entry.itemID))
-            if not iconTex and entry.itemLink then
-                local _, _, _, _, tex = GetItemInfoInstant(entry.itemLink)
-                iconTex = tex
-            end
-            if iconTex then
-                local icon = row:CreateTexture(nil, "OVERLAY")
-                icon:SetSize(iconWidth, iconWidth)
-                icon:SetPoint("TOPLEFT", row, "TOPLEFT", iconPad, -1)
-                icon:SetTexture(iconTex)
-                icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-            end
-
-            -- Item text: fixed height so buttons always sit below it
-            local itemText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-            itemText:SetPoint("TOPLEFT", row, "TOPLEFT", textX, 0)
-            itemText:SetWidth(contentWidth - textX)
-            itemText:SetHeight(textH)
-            itemText:SetJustifyH("LEFT")
-            itemText:SetJustifyV("TOP")
-            local displayText = entry.itemLink or "Unknown Item"
-            if myResponse then
-                local color = myResponse == PP.RESPONSE.NEED     and "|cFF00FF00"
-                           or myResponse == PP.RESPONSE.MINOR    and "|cFF00CCFF"
-                           or myResponse == PP.RESPONSE.TRANSMOG and "|cFFFF8800"
-                           or "|cFF888888"
-                displayText = displayText .. "  " .. color .. "[" .. myResponse .. "]|r"
-            end
-            itemText:SetText(displayText)
-
-            -- Tooltip on the item row
-            row:EnableMouse(true)
-            row:SetScript("OnEnter", function(self)
-                if entry.itemLink then
-                    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-                    GameTooltip:SetHyperlink(entry.itemLink)
-                    GameTooltip:Show()
-                end
-            end)
-            row:SetScript("OnLeave", function() GameTooltip:Hide() end)
-
-            -- Response buttons: anchored below the fixed text zone, never overlap it
-            local btnY = -(textH + btnGap)
-            local capturedKey = key
-
-            local needBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-            needBtn:SetSize(btnWidth, btnHeight)
-            needBtn:SetPoint("TOPLEFT", row, "TOPLEFT", textX, btnY)
-            needBtn:SetText("Need")
-            if myResponse == PP.RESPONSE.NEED then
-                needBtn:GetFontString():SetTextColor(0, 1, 0)
-            end
-            needBtn:SetScript("OnClick", function()
-                PP.Loot:SubmitResponse(capturedKey, PP.RESPONSE.NEED)
-            end)
-
-            local minorBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-            minorBtn:SetSize(btnWidth, btnHeight)
-            minorBtn:SetPoint("LEFT", needBtn, "RIGHT", 6, 0)
-            minorBtn:SetText("Minor")
-            if myResponse == PP.RESPONSE.MINOR then
-                minorBtn:GetFontString():SetTextColor(0, 0.8, 1)
-            end
-            minorBtn:SetScript("OnClick", function()
-                PP.Loot:SubmitResponse(capturedKey, PP.RESPONSE.MINOR)
-            end)
-
-            local showTmog = entry.allowTransmog ~= false
-
-            local tmogBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-            tmogBtn:SetSize(btnWidth, btnHeight)
-            tmogBtn:SetPoint("LEFT", minorBtn, "RIGHT", 6, 0)
-            tmogBtn:SetText("Transmog")
-            if myResponse == PP.RESPONSE.TRANSMOG then
-                tmogBtn:GetFontString():SetTextColor(1, 0.53, 0)
-            end
-            if not showTmog then
-                tmogBtn:Hide()
-            end
-            tmogBtn:SetScript("OnClick", function()
-                PP.Loot:SubmitResponse(capturedKey, PP.RESPONSE.TRANSMOG)
-            end)
-
-            local passBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-            passBtn:SetSize(btnWidth, btnHeight)
-            if showTmog then
-                passBtn:SetPoint("LEFT", tmogBtn, "RIGHT", 6, 0)
-            else
-                passBtn:SetPoint("LEFT", minorBtn, "RIGHT", 6, 0)
-            end
-            passBtn:SetText("Pass")
-            if myResponse == PP.RESPONSE.PASS then
-                passBtn:GetFontString():SetTextColor(0.5, 0.5, 0.5)
-            end
-            passBtn:SetScript("OnClick", function()
-                PP.Loot:SubmitResponse(capturedKey, PP.RESPONSE.PASS)
-            end)
-
-            row:Show()
-            yOffset = yOffset + rowHeight + 4
+            allEntries[#allEntries + 1] = { key = key, entry = entry }
         end
+    end
+    table.sort(allEntries, function(a, b)
+        local ia = tonumber(a.key:match(":(%d+)$")) or 0
+        local ib = tonumber(b.key:match(":(%d+)$")) or 0
+        return ia < ib
+    end)
+
+    for _, pair in ipairs(allEntries) do
+        local key, entry = pair.key, pair.entry
+        itemCount = itemCount + 1
+        local myResponse = entry.responses[me] and entry.responses[me].response or nil
+
+        -- Row frame for this item
+        local row = CreateFrame("Frame", nil, container)
+        row:SetSize(contentWidth, rowHeight)
+        row:SetPoint("TOPLEFT", container, "TOPLEFT", 0, -yOffset)
+
+        -- Item icon (with left padding)
+        local iconTex = (entry.itemID and C_Item.GetItemIconByID(entry.itemID))
+        if not iconTex and entry.itemLink then
+            local _, _, _, _, tex = GetItemInfoInstant(entry.itemLink)
+            iconTex = tex
+        end
+        if iconTex then
+            local icon = row:CreateTexture(nil, "OVERLAY")
+            icon:SetSize(iconWidth, iconWidth)
+            icon:SetPoint("TOPLEFT", row, "TOPLEFT", iconPad, -1)
+            icon:SetTexture(iconTex)
+            icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        end
+
+        -- Item text: fixed height so buttons always sit below it
+        local itemText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        itemText:SetPoint("TOPLEFT", row, "TOPLEFT", textX, 0)
+        itemText:SetWidth(contentWidth - textX)
+        itemText:SetHeight(textH)
+        itemText:SetJustifyH("LEFT")
+        itemText:SetJustifyV("TOP")
+        local displayText = entry.itemLink or "Unknown Item"
+        if myResponse then
+            local color = myResponse == PP.RESPONSE.NEED     and "|cFF00FF00"
+                       or myResponse == PP.RESPONSE.MINOR    and "|cFF00CCFF"
+                       or myResponse == PP.RESPONSE.TRANSMOG and "|cFFFF8800"
+                       or "|cFF888888"
+            displayText = displayText .. "  " .. color .. "[" .. myResponse .. "]|r"
+        end
+        itemText:SetText(displayText)
+
+        -- Tooltip on the item row
+        row:EnableMouse(true)
+        row:SetScript("OnEnter", function(self)
+            if entry.itemLink then
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                GameTooltip:SetHyperlink(entry.itemLink)
+                GameTooltip:Show()
+            end
+        end)
+        row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+        -- Response buttons: anchored below the fixed text zone, never overlap it
+        local btnY = -(textH + btnGap)
+        local capturedKey = key
+
+        local needBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+        needBtn:SetSize(btnWidth, btnHeight)
+        needBtn:SetPoint("TOPLEFT", row, "TOPLEFT", textX, btnY)
+        needBtn:SetText("Need")
+        if myResponse == PP.RESPONSE.NEED then
+            needBtn:GetFontString():SetTextColor(0, 1, 0)
+        end
+        needBtn:SetScript("OnClick", function()
+            PP.Loot:SubmitResponse(capturedKey, PP.RESPONSE.NEED)
+        end)
+
+        local minorBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+        minorBtn:SetSize(btnWidth, btnHeight)
+        minorBtn:SetPoint("LEFT", needBtn, "RIGHT", 6, 0)
+        minorBtn:SetText("Minor")
+        if myResponse == PP.RESPONSE.MINOR then
+            minorBtn:GetFontString():SetTextColor(0, 0.8, 1)
+        end
+        minorBtn:SetScript("OnClick", function()
+            PP.Loot:SubmitResponse(capturedKey, PP.RESPONSE.MINOR)
+        end)
+
+        local showTmog = entry.allowTransmog ~= false
+
+        local tmogBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+        tmogBtn:SetSize(btnWidth, btnHeight)
+        tmogBtn:SetPoint("LEFT", minorBtn, "RIGHT", 6, 0)
+        tmogBtn:SetText("Transmog")
+        if myResponse == PP.RESPONSE.TRANSMOG then
+            tmogBtn:GetFontString():SetTextColor(1, 0.53, 0)
+        end
+        if not showTmog then
+            tmogBtn:Hide()
+        end
+        tmogBtn:SetScript("OnClick", function()
+            PP.Loot:SubmitResponse(capturedKey, PP.RESPONSE.TRANSMOG)
+        end)
+
+        local passBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+        passBtn:SetSize(btnWidth, btnHeight)
+        if showTmog then
+            passBtn:SetPoint("LEFT", tmogBtn, "RIGHT", 6, 0)
+        else
+            passBtn:SetPoint("LEFT", minorBtn, "RIGHT", 6, 0)
+        end
+        passBtn:SetText("Pass")
+        if myResponse == PP.RESPONSE.PASS then
+            passBtn:GetFontString():SetTextColor(0.5, 0.5, 0.5)
+        end
+        passBtn:SetScript("OnClick", function()
+            PP.Loot:SubmitResponse(capturedKey, PP.RESPONSE.PASS)
+        end)
+
+        row:Show()
+        yOffset = yOffset + rowHeight + 4
     end
 
     if itemCount == 0 then
@@ -753,7 +767,9 @@ function PP:CloseLootPopups()
     end
     wipe(self.lootPopups)
     if self.lootResponseFrame then
+        self._suppressLootBars = true
         self.lootResponseFrame:Hide()
+        self._suppressLootBars = nil
     end
     self:HideLootBars()
 end
@@ -806,81 +822,92 @@ function PP:RefreshLootBars()
     local yOffset = padTop
     local count = 0
 
+    local allEntries = {}
     for key, entry in pairs(PP.Repo.Loot:GetAll()) do
         if not entry.awarded then
-            count = count + 1
-            local myResponse = entry.responses[me] and entry.responses[me].response or nil
-
-            -- Reuse existing bar or create a new one
-            local bar = bars[count]
-            if not bar then
-                bar = CreateFrame("Button", nil, f)
-                bar:SetSize(barW, barH)
-                bar:SetHighlightTexture("Interface\\Buttons\\UI-Listbox-Highlight")
-                bar:RegisterForDrag("LeftButton")
-                bar:SetScript("OnDragStart", function() f:StartMoving() end)
-                bar:SetScript("OnDragStop", function()
-                    f:StopMovingOrSizing()
-                    LibWindow.SavePosition(f)
-                end)
-                bar:SetScript("OnClick", function()
-                    f:Hide()
-                    PP:ShowLootResponseFrame()
-                end)
-                local icon = bar:CreateTexture(nil, "OVERLAY")
-                icon:SetSize(16, 16)
-                icon:SetPoint("LEFT", bar, "LEFT", 2, 0)
-                icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-                bar._icon = icon
-                local nameStr = bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-                nameStr:SetPoint("LEFT", bar, "LEFT", 22, 0)
-                nameStr:SetPoint("RIGHT", bar, "RIGHT", -42, 0)
-                nameStr:SetJustifyH("LEFT")
-                nameStr:SetJustifyV("MIDDLE")
-                bar._nameStr = nameStr
-                local respStr = bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-                respStr:SetPoint("RIGHT", bar, "RIGHT", -2, 0)
-                respStr:SetJustifyH("RIGHT")
-                respStr:SetJustifyV("MIDDLE")
-                bar._respStr = respStr
-                bars[count] = bar
-            end
-
-            -- Update position
-            bar:ClearAllPoints()
-            bar:SetPoint("TOPLEFT", f, "TOPLEFT", padX, -yOffset)
-
-            -- Update icon
-            local iconTex = (entry.itemID and C_Item.GetItemIconByID(entry.itemID))
-            if not iconTex and entry.itemLink then
-                local _, _, _, _, tex = GetItemInfoInstant(entry.itemLink)
-                iconTex = tex
-            end
-            if iconTex then
-                bar._icon:SetTexture(iconTex)
-                bar._icon:Show()
-            else
-                bar._icon:Hide()
-            end
-
-            -- Update name and response label
-            bar._nameStr:SetText(entry.itemLink or "Unknown")
-
-            if myResponse == PP.RESPONSE.NEED then
-                bar._respStr:SetText("|cFF00FF00Need|r")
-            elseif myResponse == PP.RESPONSE.MINOR then
-                bar._respStr:SetText("|cFF00CCFFMinor|r")
-            elseif myResponse == PP.RESPONSE.TRANSMOG then
-                bar._respStr:SetText("|cFFFF8800Tmog|r")
-            elseif myResponse == PP.RESPONSE.PASS then
-                bar._respStr:SetText("|cFF888888Pass|r")
-            else
-                bar._respStr:SetText("|cFFFFFF00?|r")
-            end
-
-            bar:Show()
-            yOffset = yOffset + barH + barGap
+            allEntries[#allEntries + 1] = { key = key, entry = entry }
         end
+    end
+    table.sort(allEntries, function(a, b)
+        local ia = tonumber(a.key:match(":(%d+)$")) or 0
+        local ib = tonumber(b.key:match(":(%d+)$")) or 0
+        return ia < ib
+    end)
+
+    for _, pair in ipairs(allEntries) do
+        local key, entry = pair.key, pair.entry
+        count = count + 1
+        local myResponse = entry.responses[me] and entry.responses[me].response or nil
+
+        -- Reuse existing bar or create a new one
+        local bar = bars[count]
+        if not bar then
+            bar = CreateFrame("Button", nil, f)
+            bar:SetSize(barW, barH)
+            bar:SetHighlightTexture("Interface\\Buttons\\UI-Listbox-Highlight")
+            bar:RegisterForDrag("LeftButton")
+            bar:SetScript("OnDragStart", function() f:StartMoving() end)
+            bar:SetScript("OnDragStop", function()
+                f:StopMovingOrSizing()
+                LibWindow.SavePosition(f)
+            end)
+            bar:SetScript("OnClick", function()
+                f:Hide()
+                PP:ShowLootResponseFrame()
+            end)
+            local icon = bar:CreateTexture(nil, "OVERLAY")
+            icon:SetSize(16, 16)
+            icon:SetPoint("LEFT", bar, "LEFT", 2, 0)
+            icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+            bar._icon = icon
+            local nameStr = bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            nameStr:SetPoint("LEFT", bar, "LEFT", 22, 0)
+            nameStr:SetPoint("RIGHT", bar, "RIGHT", -42, 0)
+            nameStr:SetJustifyH("LEFT")
+            nameStr:SetJustifyV("MIDDLE")
+            bar._nameStr = nameStr
+            local respStr = bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            respStr:SetPoint("RIGHT", bar, "RIGHT", -2, 0)
+            respStr:SetJustifyH("RIGHT")
+            respStr:SetJustifyV("MIDDLE")
+            bar._respStr = respStr
+            bars[count] = bar
+        end
+
+        -- Update position
+        bar:ClearAllPoints()
+        bar:SetPoint("TOPLEFT", f, "TOPLEFT", padX, -yOffset)
+
+        -- Update icon
+        local iconTex = (entry.itemID and C_Item.GetItemIconByID(entry.itemID))
+        if not iconTex and entry.itemLink then
+            local _, _, _, _, tex = GetItemInfoInstant(entry.itemLink)
+            iconTex = tex
+        end
+        if iconTex then
+            bar._icon:SetTexture(iconTex)
+            bar._icon:Show()
+        else
+            bar._icon:Hide()
+        end
+
+        -- Update name and response label
+        bar._nameStr:SetText(entry.itemLink or "Unknown")
+
+        if myResponse == PP.RESPONSE.NEED then
+            bar._respStr:SetText("|cFF00FF00Need|r")
+        elseif myResponse == PP.RESPONSE.MINOR then
+            bar._respStr:SetText("|cFF00CCFFMinor|r")
+        elseif myResponse == PP.RESPONSE.TRANSMOG then
+            bar._respStr:SetText("|cFFFF8800Tmog|r")
+        elseif myResponse == PP.RESPONSE.PASS then
+            bar._respStr:SetText("|cFF888888Pass|r")
+        else
+            bar._respStr:SetText("|cFFFFFF00?|r")
+        end
+
+        bar:Show()
+        yOffset = yOffset + barH + barGap
     end
 
     if count == 0 then

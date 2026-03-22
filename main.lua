@@ -240,7 +240,11 @@ function PiratesPlunder:SlashCommandResponse()
     local barsVisible   = self.lootBarsFrame and self.lootBarsFrame:IsShown()
     if frameVisible or barsVisible then
         -- Dismiss both (clear/dismiss path)
-        if self.lootResponseFrame then self.lootResponseFrame:Hide() end
+        if self.lootResponseFrame then
+            self._suppressLootBars = true
+            self.lootResponseFrame:Hide()
+            self._suppressLootBars = nil
+        end
         self:HideLootBars()
     else
         -- Reopen path
