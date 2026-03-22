@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.0] - 2026-03-22
+### Added
+- Minimap icon with LibDBIcon-1.0: left-click toggles main window, right-click opens loot master window
+- Pending loot bars UI: visual progress bars for active loot postings
+
+### Fixed
+- Leader change stale raid: session now correctly reactivates on rejoin after leader swap
+- Sync gating to prevent unintentional guild entry creation
+
 ## [0.3.2] - 2026-03-21
 ### Changed
 - Clarified `GetData` vs `EnsureData` API in `PP.Repo.Roster`: `EnsureData` auto-creates the guild entry if missing; `GetData` returns nil for absent entries
