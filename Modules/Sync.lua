@@ -190,11 +190,17 @@ function PP:RequestSync()
     })
 end
 
-function PP:SendFullSync(target)
-    -- Send all known guild data so the recipient can merge everything
+function PP:SendFullSync(target, guildKey)
+    -- Send only the requested guild's data; sending all keys is wasteful and
+    -- risks the receiver merging data for guilds it has no context for.
     local guilds = {}
-    for gk, gd in pairs(self.db.global.guilds) do
-        guilds[gk] = gd
+    if guildKey then
+        local gd = PP.Repo.Roster:GetData(guildKey)
+        if gd then guilds[guildKey] = gd end
+    else
+        for gk, gd in pairs(self.db.global.guilds) do
+            guilds[gk] = gd
+        end
     end
     self:SendAddonMessage(PP.MSG.SYNC_FULL, {
         guilds       = guilds,
@@ -232,14 +238,18 @@ function PP:HandleSyncRequest(sender, data)
     -- detect that the requester needs a restore.
     local myActiveID        = gd.activeSessionID
     local requesterActiveID = data and data.activeSessionID
+    -- Only treat a session-ID mismatch as a sync trigger when we actually have
+    -- an active session to offer.  If we have no session, responding would just
+    -- send a large payload that can't help the requester restore anything.
     local sessionMismatch   = (myActiveID ~= requesterActiveID)
                            and (myActiveID ~= nil or requesterActiveID ~= nil)
+                           and myActiveID ~= nil
     if requesterVersion >= gd.rosterVersion and requesterRaidItems >= myRaidItems
        and not sessionMismatch then return end
     -- Random jitter 0.3-1.5 s so multiple officers don't reply simultaneously
     local delay = 0.3 + math.random() * 1.2
     self:ScheduleTimer(function()
-        self:SendFullSync(sender)
+        self:SendFullSync(sender, gk)
     end, delay)
 end
 
@@ -330,7 +340,9 @@ function PP:HandleSyncFull(data, sender)
                 end
                 -- A restored session may make us the active leader; re-run the
                 -- leader check so the "Continue?" prompt fires if we hold rank 2.
-                if IsInRaid() then
+                -- Gate on active guild key to avoid redundant calls if the sync
+                -- payload happens to contain multiple guild keys.
+                if IsInRaid() and gk == activeKey then
                     PP.Session:CheckLeaderPresent()
                 end
             end

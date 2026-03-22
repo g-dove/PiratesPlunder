@@ -633,12 +633,16 @@ function PiratesPlunder:OnGroupRosterUpdate()
         end
     end
 
-    -- When in a raid, track the raid leader's guild as the active guild key.
-    -- This prevents officers from foreign guilds from modifying the roster.
+    -- When in a raid, prefer the raid leader's guild as the active key — but
+    -- only if we already have data for it.  If not, fall back to our own guild
+    -- so we don't start operating on a fresh empty record for an unknown guild.
+    -- HandleSessionCreate will set the key correctly once a session is broadcast.
     if IsInRaid() then
         local leaderGuild = self:GetRaidLeaderGuild()
-        if leaderGuild then
+        if leaderGuild and self.db.global.guilds[leaderGuild] then
             self._activeGuildKey = leaderGuild
+        else
+            self._activeGuildKey = self:GetPlayerGuild() or nil
         end
     end
 
