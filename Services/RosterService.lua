@@ -132,7 +132,9 @@ end
 ---------------------------------------------------------------------------
 function PP.Roster:AutoPopulate()
     if not IsInRaid() then return end
+    if not PP:IsRaidLeader() then return end
     local count = GetNumGroupMembers()
+    local added = false
 
     for i = 1, count do
         local unit = "raid" .. i
@@ -142,8 +144,13 @@ function PP.Roster:AutoPopulate()
             local roster = PP.Repo.Roster:GetRoster()
             if not roster[fullName] then
                 roster[fullName] = NewEntry(fullName)
+                added = true
             end
         end
+    end
+
+    if added then
+        CommitRosterChange()
     end
 end
 
