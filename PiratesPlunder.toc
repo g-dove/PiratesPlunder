@@ -35,6 +35,7 @@ Commands\RosterCommands.lua
 Commands\SessionCommands.lua
 Commands\DevCommands.lua
 UI\MainWindow.lua
+UI\MinimapIcon.lua
 UI\VersionCheckWindow.lua
 UI\LootWindow.lua
 UI\AwardedLootWindow.lua

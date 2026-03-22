@@ -71,6 +71,8 @@ local defaults = {
         allowTransmogRolls = true,
         -- Auto-pass in-game loot rolls of Epic+ for non-leaders (synced by raid leader)
         autoPassEpicRolls = false,
+        -- LibDBIcon persists minimap button position/visibility here
+        minimapIcon = { hide = false },
     },
     profile = {},
 }
@@ -166,6 +168,7 @@ function PiratesPlunder:OnInitialize()
     -- Do not wipe; handlers are already registered before OnInitialize fires.
     self._commandGroups = self._commandGroups or {}
 
+    self:SetupMinimapIcon()
     self:Print("Pirates Plunder v" .. self.VERSION .. " loaded. Type /pp to open.")
 end
 
