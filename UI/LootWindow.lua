@@ -499,6 +499,19 @@ function PP:AddItemTooltip(frame, itemLink)
     end)
 end
 
+-- Stable sort for pending loot entries. Keys have the format
+-- "itemLink:timestamp:index". Sort primarily by timestamp so order is
+-- chronological across reloads; use index as a tiebreaker within the
+-- same second (_lootKeyIndex resets on reload so index alone is not stable).
+local function lootEntrySortLess(a, b)
+    local ta, ia = a.key:match(":(%d+):(%d+)$")
+    local tb, ib = b.key:match(":(%d+):(%d+)$")
+    ta, ia = tonumber(ta) or 0, tonumber(ia) or 0
+    tb, ib = tonumber(tb) or 0, tonumber(ib) or 0
+    if ta == tb then return ia < ib end
+    return ta < tb
+end
+
 -- =========================================================================
 --  UNIFIED MULTI-ITEM RESPONSE FRAME
 --  Shows ALL pending loot items. Players can respond or change their
@@ -506,6 +519,13 @@ end
 -- =========================================================================
 
 function PP:ShowLootResponseFrame()
+    -- Bail out early if there is nothing to show
+    local hasItems = false
+    for _, entry in pairs(PP.Repo.Loot:GetAll()) do
+        if not entry.awarded then hasItems = true; break end
+    end
+    if not hasItems then return end
+
     -- Always hide bars first, regardless of whether the frame already exists
     self:HideLootBars()
 
@@ -768,19 +788,6 @@ function PP:CloseLootPopups()
         self._suppressLootBars = nil
     end
     self:HideLootBars()
-end
-
--- Stable sort for pending loot entries. Keys have the format
--- "itemLink:timestamp:index". Sort primarily by timestamp so order is
--- chronological across reloads; use index as a tiebreaker within the
--- same second (_lootKeyIndex resets on reload so index alone is not stable).
-local function lootEntrySortLess(a, b)
-    local ta, ia = a.key:match(":(%d+):(%d+)$")
-    local tb, ib = b.key:match(":(%d+):(%d+)$")
-    ta, ia = tonumber(ta) or 0, tonumber(ia) or 0
-    tb, ib = tonumber(tb) or 0, tonumber(ib) or 0
-    if ta == tb then return ia < ib end
-    return ta < tb
 end
 
 -- =========================================================================
