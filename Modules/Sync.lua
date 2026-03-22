@@ -183,9 +183,10 @@ function PP:RequestSync()
         raidItemCount = raidItemCount + #(session.items or {})
     end
     self:SendAddonMessage(PP.MSG.SYNC_REQUEST, {
-        guildKey      = gk,
-        rosterVersion = gd.rosterVersion,
-        raidItemCount = raidItemCount,
+        guildKey        = gk,
+        rosterVersion   = gd.rosterVersion,
+        raidItemCount   = raidItemCount,
+        activeSessionID = gd.activeSessionID,
     })
 end
 
@@ -225,8 +226,14 @@ function PP:HandleSyncRequest(sender, data)
     for _, session in pairs(gd.sessions or {}) do
         myRaidItems = myRaidItems + #(session.items or {})
     end
-    -- Respond if roster OR raid-award records are behind
-    if requesterVersion >= gd.rosterVersion and requesterRaidItems >= myRaidItems then return end
+    -- Respond if roster OR raid-award records are behind.
+    -- Also respond if we have an active session the requester is missing —
+    -- LEADER_LEFT ends sessions without changing versions, so version parity
+    -- alone is not enough to detect that the requester needs a restore.
+    local myActiveID = gd.activeSessionID
+    local sessionMismatch = myActiveID and (data.activeSessionID ~= myActiveID)
+    if requesterVersion >= gd.rosterVersion and requesterRaidItems >= myRaidItems
+       and not sessionMismatch then return end
     -- Random jitter 0.3-1.5 s so multiple officers don't reply simultaneously
     local delay = 0.3 + math.random() * 1.2
     self:ScheduleTimer(function()
@@ -318,6 +325,11 @@ function PP:HandleSyncFull(data, sender)
                         self:CancelTimer(self._pendingSessionEndTimer)
                         self._pendingSessionEndTimer = nil
                     end
+                end
+                -- A restored session may make us the active leader; re-run the
+                -- leader check so the "Continue?" prompt fires if we hold rank 2.
+                if IsInRaid() then
+                    PP.Session:CheckLeaderPresent()
                 end
             end
         end
