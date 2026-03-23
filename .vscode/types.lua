@@ -605,7 +605,10 @@ function PPAddon:CloseLootPopups() end
 ---@param itemLink string
 function PPAddon:ShowLootPopup(key, itemLink) end
 
-function PPAddon:HideLootReopenButton() end
+function PPAddon:CreateLootBarsFrame() end
+function PPAddon:ShowLootBars() end
+function PPAddon:HideLootBars() end
+function PPAddon:RefreshLootBars() end
 
 -- UI/AwardedLootWindow.lua ------------------------------------------------
 
