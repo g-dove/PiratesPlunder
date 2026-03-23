@@ -176,24 +176,35 @@ function PP:RequestSync()
     if not IsInGroup() then return end
     local gk = self:GetActiveGuildKey()
     local gd = PP.Repo.Roster:GetData(gk)
-    if not gd then return end
-    -- Count session award records we have so peers can detect a gap
-    local raidItemCount = 0
-    for _, session in pairs(gd.sessions or {}) do
-        raidItemCount = raidItemCount + #(session.items or {})
+    -- If we have no local record at all, send floor values so any officer with
+    -- data for this guild key will see us as behind and respond with SYNC_FULL.
+    local rosterVersion   = gd and gd.rosterVersion   or -1
+    local activeSessionID = gd and gd.activeSessionID or nil
+    local raidItemCount   = 0
+    if gd then
+        for _, session in pairs(gd.sessions or {}) do
+            raidItemCount = raidItemCount + #(session.items or {})
+        end
     end
     self:SendAddonMessage(PP.MSG.SYNC_REQUEST, {
-        guildKey      = gk,
-        rosterVersion = gd.rosterVersion,
-        raidItemCount = raidItemCount,
+        guildKey        = gk,
+        rosterVersion   = rosterVersion,
+        raidItemCount   = raidItemCount,
+        activeSessionID = activeSessionID,
     })
 end
 
-function PP:SendFullSync(target)
-    -- Send all known guild data so the recipient can merge everything
+function PP:SendFullSync(target, guildKey)
+    -- Send only the requested guild's data; sending all keys is wasteful and
+    -- risks the receiver merging data for guilds it has no context for.
     local guilds = {}
-    for gk, gd in pairs(self.db.global.guilds) do
-        guilds[gk] = gd
+    if guildKey then
+        local gd = PP.Repo.Roster:GetData(guildKey)
+        if gd then guilds[guildKey] = gd end
+    else
+        for gk, gd in pairs(self.db.global.guilds) do
+            guilds[gk] = gd
+        end
     end
     self:SendAddonMessage(PP.MSG.SYNC_FULL, {
         guilds       = guilds,
@@ -218,6 +229,9 @@ function PP:HandleSyncRequest(sender, data)
     if not myGuild or gk ~= myGuild then return end
     local gd = PP.Repo.Roster:GetData(gk)
     if not gd then return end
+    -- Only respond when we have an active session — without one there is nothing
+    -- meaningful to restore and we avoid syncing roster data to non-members.
+    if not gd.activeSessionID then return end
     local requesterVersion   = data and data.rosterVersion   or -1
     local requesterRaidItems = data and data.raidItemCount   or -1
     -- Count our own awarded items across all sessions
@@ -225,12 +239,24 @@ function PP:HandleSyncRequest(sender, data)
     for _, session in pairs(gd.sessions or {}) do
         myRaidItems = myRaidItems + #(session.items or {})
     end
-    -- Respond if roster OR raid-award records are behind
-    if requesterVersion >= gd.rosterVersion and requesterRaidItems >= myRaidItems then return end
+    -- Respond if roster OR raid-award records are behind.
+    -- Also respond if active session IDs differ — LEADER_LEFT ends sessions
+    -- without changing versions, so version parity alone is not enough to
+    -- detect that the requester needs a restore.
+    local myActiveID        = gd.activeSessionID
+    local requesterActiveID = data and data.activeSessionID
+    -- Only treat a session-ID mismatch as a sync trigger when we actually have
+    -- an active session to offer.  If we have no session, responding would just
+    -- send a large payload that can't help the requester restore anything.
+    local sessionMismatch   = (myActiveID ~= requesterActiveID)
+                           and (myActiveID ~= nil or requesterActiveID ~= nil)
+                           and myActiveID ~= nil
+    if requesterVersion >= gd.rosterVersion and requesterRaidItems >= myRaidItems
+       and not sessionMismatch then return end
     -- Random jitter 0.3-1.5 s so multiple officers don't reply simultaneously
     local delay = 0.3 + math.random() * 1.2
     self:ScheduleTimer(function()
-        self:SendFullSync(sender)
+        self:SendFullSync(sender, gk)
     end, delay)
 end
 
@@ -319,6 +345,13 @@ function PP:HandleSyncFull(data, sender)
                         self._pendingSessionEndTimer = nil
                     end
                 end
+                -- A restored session may make us the active leader; re-run the
+                -- leader check so the "Continue?" prompt fires if we hold rank 2.
+                -- Gate on active guild key to avoid redundant calls if the sync
+                -- payload happens to contain multiple guild keys.
+                if IsInRaid() and gk == activeKey then
+                    PP.Session:CheckLeaderPresent()
+                end
             end
         end
     end
@@ -361,9 +394,16 @@ function PP:HandleSessionCreate(data, sender)
     end
     gd.sessions[data.raidID] = data.raid
     gd.activeSessionID = data.raidID
-    -- Adopt this guild key as active if we don't have one set
-    if not self._activeGuildKey then
+    -- When in a raid, always adopt the session's guild key — guards against the
+    -- timing race where GetRaidLeaderGuild() returned nil in OnGroupRosterUpdate
+    -- before unit data had populated.  Outside a raid, only set if unset.
+    if IsInRaid() or not self._activeGuildKey then
         self._activeGuildKey = gk
+    end
+    -- If we have no roster data yet (fresh install / cleared vars), request a
+    -- sync so the officer sends us the full roster now that a session is active.
+    if gd.rosterVersion == 0 then
+        self:ScheduleTimer(function() self:RequestSync() end, 1)
     end
     self:Print("Session started: " .. (data.raid.name or data.raidID))
     self:RefreshMainWindow()

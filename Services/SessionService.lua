@@ -105,8 +105,10 @@ function PP.Session:Create(raidName)
     }
     PP.Repo.Roster:SetActiveSessionID(gk, sessionID)
 
-    -- Snapshot current members
+    
     PP.Roster:AutoPopulate()
+
+    -- this does f all right now, why tf are we storing this?
     local session = gd.sessions[sessionID]
     for i = 1, GetNumGroupMembers() do
         local name = GetRaidRosterInfo(i)
@@ -231,8 +233,24 @@ function PP.Session:CheckLeaderPresent()
                 end
             end, 5)
         end
+    else
+        -- Someone else became leader; their client handles the prompt.
+        -- Cancel any deferred end timer — the transition was clean.
+        if PP._pendingLeaderLeftTimer then
+            PP:CancelTimer(PP._pendingLeaderLeftTimer)
+            PP._pendingLeaderLeftTimer = nil
+        end
+        -- Keep local raid.leader current. Without this, if leadership later
+        -- returns to us, leaderStillLeading would falsely fire the early-return
+        -- guard (our name still stored as leader) and we would skip the prompt.
+        if newLeader then
+            local gk = PP:GetActiveGuildKey()
+            local gd = PP.Repo.Roster:GetData(gk)
+            if gd and gd.sessions and gd.sessions[id] then
+                gd.sessions[id].leader = newLeader
+            end
+        end
     end
-    -- If someone else is the new leader, their client handles the prompt
 end
 
 ---------------------------------------------------------------------------
