@@ -5,10 +5,10 @@
 local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 
 local ICON_CUSTOM = "Interface\\AddOns\\PiratesPlunder\\Media\\icon"
+local icon        = LibStub("LibDBIcon-1.0")
 
 function PP:SetupMinimapIcon()
-    local ldb  = LibStub("LibDataBroker-1.1")
-    local icon = LibStub("LibDBIcon-1.0")
+    local ldb = LibStub("LibDataBroker-1.1")
 
     local broker = ldb:NewDataObject("PiratesPlunder", {
         type = "launcher",
@@ -31,4 +31,14 @@ function PP:SetupMinimapIcon()
     })
 
     icon:Register("PiratesPlunder", broker, self.db.global.minimapIcon)
+end
+
+function PP:ShowMinimapIcon()
+    self.db.global.minimapIcon.hide = false
+    icon:Show("PiratesPlunder")
+end
+
+function PP:HideMinimapIcon()
+    self.db.global.minimapIcon.hide = true
+    icon:Hide("PiratesPlunder")
 end
