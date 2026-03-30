@@ -278,7 +278,6 @@ function PPAddon:FindCustomRosterWithActiveRaid() end
 
 ---@param input string
 function PPAddon:SlashCommand(input) end
-function PPAddon:SlashCommandLoot() end
 function PPAddon:SlashCommandResponse() end
 
 --- Normalize a bare name or "Name-Realm" to "Name-Realm".
@@ -627,6 +626,12 @@ function PPAddon:DrawAwardedLootContent(container, fullName) end
 --- Registers the LibDataBroker data object and LibDBIcon minimap button.
 --- Called once at the end of OnInitialize after self.db is available.
 function PPAddon:SetupMinimapIcon() end
+
+--- Show the minimap button and persist the visible state across reloads.
+function PPAddon:ShowMinimapIcon() end
+
+--- Hide the minimap button and persist the hidden state across reloads.
+function PPAddon:HideMinimapIcon() end
 
 -- UI/VersionCheckWindow.lua -----------------------------------------------
 

@@ -32,9 +32,7 @@ Modules\Loot.lua
 Modules\AwardedLoot.lua
 Modules\Sync.lua
 Modules\Trade.lua
-Commands\RosterCommands.lua
-Commands\SessionCommands.lua
-Commands\DevCommands.lua
+Commands\Commands.lua
 UI\MainWindow.lua
 UI\MinimapIcon.lua
 UI\VersionCheckWindow.lua
