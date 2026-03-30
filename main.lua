@@ -8,6 +8,8 @@ local PiratesPlunder = LibStub("AceAddon-3.0"):NewAddon("PiratesPlunder",
     "AceConsole-3.0", "AceHook-3.0", "AceComm-3.0",
     "AceSerializer-3.0", "AceEvent-3.0", "AceTimer-3.0")
 
+local LDBIcon = LibStub("LibDBIcon-1.0")
+
 NS.addon = PiratesPlunder
 _G.PiratesPlunder = PiratesPlunder -- global for module files
 ---@type PPAddon
@@ -220,6 +222,19 @@ end
 ---------------------------------------------------------------------------
 function PiratesPlunder:SlashCommand(input)
     input = input and input:trim() or ""
+	if input == "minimap" then
+		local hide = not self.db.global.minimapIcon.hide
+		self.db.global.minimapIcon.hide = hide
+
+		if hide then
+			LDBIcon:Hide("PiratesPlunder")
+			self:Print("Minimap icon hidden.")
+		else
+			LDBIcon:Show("PiratesPlunder")
+			self:Print("Minimap icon shown.")
+		end
+		return
+	end
     if input == "" then self:ToggleMainWindow(); return end
     for _, handler in ipairs(self._commandGroups) do
         if handler(input) then return end
