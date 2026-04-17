@@ -182,11 +182,16 @@ function PP:DrawLootMasterContent(container)
         container:AddChild(itemGroup)
 
         -- Tooltip only when hovering the item name in the title bar
-        local titleOverlay = CreateFrame("Frame", nil, itemGroup.frame)
+        local titleOverlay = itemGroup.frame._ppOverlay
+        if not titleOverlay then
+            titleOverlay = CreateFrame("Frame", nil, itemGroup.frame)
+            titleOverlay:SetHeight(18)
+            itemGroup.frame._ppOverlay = titleOverlay
+        end
+        titleOverlay:ClearAllPoints()
         titleOverlay:SetPoint("TOPLEFT",  itemGroup.frame, "TOPLEFT",  14, -1)
         titleOverlay:SetPoint("TOPRIGHT", itemGroup.frame, "TOPRIGHT", -14, -1)
-        titleOverlay:SetHeight(18)
-        titleOverlay:EnableMouse(true)
+        titleOverlay:Show()
         self:AddItemTooltip(titleOverlay, item.itemLink)
 
         -- Response count info
