@@ -7,6 +7,19 @@
 local PP  = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 local AceGUI = PP.AceGUI
 
+-- Stable sort for pending loot entries. Keys have the format
+-- "itemLink:timestamp:index". Sort primarily by timestamp so order is
+-- chronological across reloads; use index as a tiebreaker within the
+-- same second (_lootKeyIndex resets on reload so index alone is not stable).
+local function lootEntrySortLess(a, b)
+    local ta, ia = a.key:match(":([%d%.]+):(%d+)$")
+    local tb, ib = b.key:match(":([%d%.]+):(%d+)$")
+    ta, ia = tonumber(ta) or 0, tonumber(ia) or 0
+    tb, ib = tonumber(tb) or 0, tonumber(ib) or 0
+    if ta == tb then return ia < ib end
+    return ta < tb
+end
+
 -- =========================================================================
 --  LOOT-MASTER WINDOW
 -- =========================================================================
@@ -151,6 +164,7 @@ function PP:DrawLootMasterContent(container)
     container:AddChild(heading)
 
     local pending = self:GetPendingLootList()
+    table.sort(pending, lootEntrySortLess)
 
     if #pending == 0 then
         local empty = AceGUI:Create("Label")
@@ -497,19 +511,6 @@ function PP:AddItemTooltip(frame, itemLink)
     frame:SetScript("OnLeave", function()
         GameTooltip:Hide()
     end)
-end
-
--- Stable sort for pending loot entries. Keys have the format
--- "itemLink:timestamp:index". Sort primarily by timestamp so order is
--- chronological across reloads; use index as a tiebreaker within the
--- same second (_lootKeyIndex resets on reload so index alone is not stable).
-local function lootEntrySortLess(a, b)
-    local ta, ia = a.key:match(":([%d%.]+):(%d+)$")
-    local tb, ib = b.key:match(":([%d%.]+):(%d+)$")
-    ta, ia = tonumber(ta) or 0, tonumber(ia) or 0
-    tb, ib = tonumber(tb) or 0, tonumber(ib) or 0
-    if ta == tb then return ia < ib end
-    return ta < tb
 end
 
 -- =========================================================================
