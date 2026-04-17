@@ -42,6 +42,7 @@ PiratesPlunder.MSG = {
     LOOT_STATE_REPLY  = "LOT_SRP",
     VERSION_REQUEST   = "VER_REQ",
     VERSION_REPLY     = "VER_REP",
+    ACK               = "ACK",
 }
 
 -- Loot response types

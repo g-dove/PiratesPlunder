@@ -31,6 +31,7 @@ function PP.Session:End(reason, sessionID, guildKey)
     sessionID = sessionID or (gd and gd.activeSessionID)
     if not sessionID then return end
 
+    PP:StopPeriodicSync()
     PP.Repo.Roster:MarkSessionEnded(guildKey, sessionID, time(), reason)
     PP.Repo.Roster:ClearActiveSessionID(guildKey)
     PP.Repo.Loot:WipeAll()
@@ -117,6 +118,7 @@ function PP.Session:Create(raidName)
 
     PP:Print("Session created: " .. raidName)
     PP:BroadcastSessionCreate(sessionID)
+    PP:StartPeriodicSync()
     PP:RefreshMainWindow()
 end
 

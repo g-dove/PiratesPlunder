@@ -5,18 +5,60 @@
 local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 
 ---------------------------------------------------------------------------
+-- Reliable broadcast state
+---------------------------------------------------------------------------
+local RETRY_DELAY            = 4    -- seconds between whisper retry attempts
+local MAX_RETRIES            = 3    -- max whisper retries before giving up
+local PERIODIC_SYNC_INTERVAL = 90   -- seconds between version-check broadcasts
+local SYNC_INHIBIT_WINDOW    = 60   -- skip check if SYNC_FULL received within N seconds
+
+PP._retryQueue           = {}
+PP._seenAckIds           = {}
+PP._lastSyncFullReceived = 0
+PP._periodicSyncTicker   = nil
+
+-- ChatThrottleLib priority per message type. Omitted = "NORMAL".
+local MSG_PRIORITY = {
+    LOT_PST  = "ALERT",  -- LOOT_POST
+    LOT_AWD  = "ALERT",  -- LOOT_AWARD
+    LOT_CAN  = "ALERT",  -- LOOT_CANCEL
+    LOT_INT  = "ALERT",  -- LOOT_INTEREST
+    SES_CRE  = "ALERT",  -- SESSION_CREATE
+    SES_CLS  = "ALERT",  -- SESSION_CLOSE
+    ACK      = "ALERT",
+    SYN_REQ  = "BULK",   -- SYNC_REQUEST
+    LOT_SQR  = "BULK",   -- LOOT_STATE_QUERY
+    RAD_SET  = "BULK",   -- RAID_SETTINGS
+    VER_REQ  = "BULK",   -- VERSION_REQUEST
+    VER_REP  = "BULK",   -- VERSION_REPLY
+}
+
+local function snapshotGroup(self)
+    local members, me = {}, self:GetPlayerFullName()
+    for i = 1, GetNumGroupMembers() do
+        local name, _, _, _, _, _, _, online = GetRaidRosterInfo(i)
+        if name and online then
+            local full = self:GetFullName(name)
+            if full ~= me then members[full] = false end
+        end
+    end
+    return members
+end
+
+---------------------------------------------------------------------------
 -- Send a structured message to the raid / party
 ---------------------------------------------------------------------------
 function PP:SendAddonMessage(msgType, data, target)
     -- Never broadcast real messages while in sandbox mode
     if self._sandbox then return end
     local payload = self:Serialize(msgType, data)
+    local prio    = MSG_PRIORITY[msgType] or "NORMAL"
     if target then
-        self:SendCommMessage(PP.COMM_PREFIX, payload, "WHISPER", target)
+        self:SendCommMessage(PP.COMM_PREFIX, payload, "WHISPER", target, prio)
     elseif IsInRaid() then
-        self:SendCommMessage(PP.COMM_PREFIX, payload, "RAID")
+        self:SendCommMessage(PP.COMM_PREFIX, payload, "RAID", nil, prio)
     elseif IsInGroup() then
-        self:SendCommMessage(PP.COMM_PREFIX, payload, "PARTY")
+        self:SendCommMessage(PP.COMM_PREFIX, payload, "PARTY", nil, prio)
     end
 end
 
@@ -34,8 +76,16 @@ function PP:OnCommReceived(prefix, message, distribution, sender)
     sender = self:GetFullName(sender)
     if sender == me then return end
 
+    -- ACK any critical broadcast so the sender can cancel whisper retries
+    if data and data._ackId then
+        self:SendAddonMessage(PP.MSG.ACK, { ackId = data._ackId }, self:GetShortName(sender))
+    end
+
     -- Dispatch
-    if msgType == PP.MSG.SYNC_REQUEST then
+    if msgType == PP.MSG.ACK then
+        if data and data.ackId then self:_handleAck(data.ackId, sender) end
+
+    elseif msgType == PP.MSG.SYNC_REQUEST then
         self:HandleSyncRequest(sender, data)
 
     elseif msgType == PP.MSG.SYNC_FULL then
@@ -111,6 +161,86 @@ function PP:BroadcastRaidSettings()
     self:SendAddonMessage(PP.MSG.RAID_SETTINGS, {
         autoPassEpicRolls = self.db.global.autoPassEpicRolls,
     })
+end
+
+---------------------------------------------------------------------------
+-- Reliable broadcast: initial RAID/PARTY broadcast + whisper retry for
+-- members who don't ACK. Used for ephemeral loot events that have no
+-- recovery path if dropped (LOOT_POST, LOOT_AWARD, LOOT_CANCEL).
+---------------------------------------------------------------------------
+function PP:BroadcastCritical(msgType, data, maxRetries)
+    local id = math.random(1, 2147483647)
+    data._ackId = id
+    local entry = {
+        msgType    = msgType,
+        data       = data,
+        expected   = snapshotGroup(self),
+        retries    = 0,
+        maxRetries = maxRetries or MAX_RETRIES,
+    }
+    PP._retryQueue[id] = entry
+    self:SendAddonMessage(msgType, data)
+    entry.timerId = self:ScheduleTimer(function() self:_retryBroadcast(id) end, RETRY_DELAY)
+end
+
+function PP:_retryBroadcast(id)
+    local e = PP._retryQueue[id]
+    if not e then return end
+
+    local current = snapshotGroup(self)
+    for name in pairs(e.expected) do
+        if not current[name] then e.expected[name] = nil end
+    end
+
+    local anyPending = false
+    for _, acked in pairs(e.expected) do
+        if not acked then anyPending = true; break end
+    end
+
+    if not anyPending or e.retries >= e.maxRetries then
+        PP._retryQueue[id] = nil
+        return
+    end
+
+    e.retries = e.retries + 1
+    for name, acked in pairs(e.expected) do
+        if not acked then
+            self:SendAddonMessage(e.msgType, e.data, self:GetShortName(name))
+        end
+    end
+    e.timerId = self:ScheduleTimer(function() self:_retryBroadcast(id) end, RETRY_DELAY)
+end
+
+function PP:_handleAck(ackId, sender)
+    local e = PP._retryQueue[ackId]
+    if not e then return end
+    local full = self:GetFullName(sender)
+    if e.expected[full] == false then
+        e.expected[full] = true
+    end
+end
+
+---------------------------------------------------------------------------
+-- Periodic version check: reuses RequestSync() every 90s (out of combat)
+-- so mid-raid score/state drift is caught without spamming full syncs.
+-- Officers only respond if requester is verifiably behind (existing gate).
+---------------------------------------------------------------------------
+function PP:StartPeriodicSync()
+    if PP._periodicSyncTicker then return end
+    PP._periodicSyncTicker = C_Timer.NewTicker(PERIODIC_SYNC_INTERVAL, function()
+        if UnitAffectingCombat("player") then return end
+        if not PP.Repo.Roster:HasActiveSession() then return end
+        if (GetTime() - PP._lastSyncFullReceived) < SYNC_INHIBIT_WINDOW then return end
+        PP:RequestSync()
+    end)
+end
+
+function PP:StopPeriodicSync()
+    if PP._periodicSyncTicker then
+        PP._periodicSyncTicker:Cancel()
+        PP._periodicSyncTicker = nil
+    end
+    PP._seenAckIds = {}
 end
 
 function PP:HandleRaidSettings(data, sender)
@@ -262,6 +392,7 @@ end
 
 -- Receive full sync data
 function PP:HandleSyncFull(data, sender)
+    PP._lastSyncFullReceived = GetTime()
     if not data or not data.guilds then return end
     -- Only accept data for guild keys we already know about or that match our
     -- own guild / active key.  This prevents foreign guild records from being
@@ -406,6 +537,7 @@ function PP:HandleSessionCreate(data, sender)
         self:ScheduleTimer(function() self:RequestSync() end, 1)
     end
     self:Print("Session started: " .. (data.raid.name or data.raidID))
+    self:StartPeriodicSync()
     self:RefreshMainWindow()
 end
 
@@ -471,6 +603,10 @@ end
 -- Loot posted for distribution
 function PP:HandleLootPost(data, sender)
     if not data or not data.key then return end
+    if data._ackId then
+        if PP._seenAckIds[data._ackId] then return end
+        PP._seenAckIds[data._ackId] = true
+    end
     -- Store locally so we can respond
     PP.Repo.Loot:SetEntry(data.key, {
         itemLink      = data.itemLink,
@@ -500,6 +636,10 @@ end
 -- Loot awarded
 function PP:HandleLootAward(data, sender)
     if not data or not data.key then return end
+    if data._ackId then
+        if PP._seenAckIds[data._ackId] then return end
+        PP._seenAckIds[data._ackId] = true
+    end
     -- Record item in raid history for all clients
     if data.itemLink and data.awardedTo then
         PP.Session:RecordItemAward(data.itemLink, data.itemID, data.awardedTo, data.pointsSpent, data.response, data.key)
@@ -624,6 +764,10 @@ end
 -- Loot posting cancelled
 function PP:HandleLootCancel(data, sender)
     if not data or not data.key then return end
+    if data._ackId then
+        if PP._seenAckIds[data._ackId] then return end
+        PP._seenAckIds[data._ackId] = true
+    end
     PP.Repo.Loot:ClearEntry(data.key)
     if self.lootPopups[data.key] then
         self.lootPopups[data.key]:Hide()
