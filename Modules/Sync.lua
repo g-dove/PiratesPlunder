@@ -20,18 +20,18 @@ PP._periodicSyncTicker   = nil
 
 -- ChatThrottleLib priority per message type. Omitted = "NORMAL".
 local MSG_PRIORITY = {
-    LOT_PST  = "ALERT",  -- LOOT_POST
-    LOT_AWD  = "ALERT",  -- LOOT_AWARD
-    LOT_CAN  = "ALERT",  -- LOOT_CANCEL
-    LOT_INT  = "ALERT",  -- LOOT_INTEREST
-    SES_CRE  = "ALERT",  -- SESSION_CREATE
-    SES_CLS  = "ALERT",  -- SESSION_CLOSE
-    ACK      = "ALERT",
-    SYN_REQ  = "BULK",   -- SYNC_REQUEST
-    LOT_SQR  = "BULK",   -- LOOT_STATE_QUERY
-    RAD_SET  = "BULK",   -- RAID_SETTINGS
-    VER_REQ  = "BULK",   -- VERSION_REQUEST
-    VER_REP  = "BULK",   -- VERSION_REPLY
+    [PP.MSG.LOOT_POST]        = "ALERT",
+    [PP.MSG.LOOT_AWARD]       = "ALERT",
+    [PP.MSG.LOOT_CANCEL]      = "ALERT",
+    [PP.MSG.LOOT_INTEREST]    = "ALERT",
+    [PP.MSG.SESSION_CREATE]   = "ALERT",
+    [PP.MSG.SESSION_CLOSE]    = "ALERT",
+    [PP.MSG.ACK]              = "ALERT",
+    [PP.MSG.SYNC_REQUEST]     = "BULK",
+    [PP.MSG.LOOT_STATE_QUERY] = "BULK",
+    [PP.MSG.RAID_SETTINGS]    = "BULK",
+    [PP.MSG.VERSION_REQUEST]  = "BULK",
+    [PP.MSG.VERSION_REPLY]    = "BULK",
 }
 
 local function snapshotGroup(self)
@@ -183,7 +183,7 @@ end
 -- recovery path if dropped (LOOT_POST, LOOT_AWARD, LOOT_CANCEL).
 ---------------------------------------------------------------------------
 function PP:BroadcastCritical(msgType, data, maxRetries)
-    if not IsInGroup() then return end
+    if self._sandbox or not IsInGroup() then return end
     PP._ackCounter = PP._ackCounter + 1
     local id = PP._ackCounter
     data._ackId = id
