@@ -47,7 +47,7 @@ local function snapshotGroup(self)
     else
         for i = 1, 4 do
             local unit = "party" .. i
-            if UnitExists(unit) then
+            if UnitExists(unit) and UnitIsConnected(unit) then
                 local name, realm = UnitName(unit)
                 if name then
                     local full = self:GetFullName(name .. (realm and realm ~= "" and ("-" .. realm) or ""))
