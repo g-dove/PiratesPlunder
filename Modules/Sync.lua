@@ -48,8 +48,11 @@ local function snapshotGroup(self)
         for i = 1, 4 do
             local unit = "party" .. i
             if UnitExists(unit) then
-                local full = self:GetFullName(UnitName(unit))
-                if full ~= me then members[full] = false end
+                local name, realm = UnitName(unit)
+                if name then
+                    local full = self:GetFullName(name .. (realm and realm ~= "" and ("-" .. realm) or ""))
+                    if full ~= me then members[full] = false end
+                end
             end
         end
     end
@@ -201,7 +204,7 @@ function PP:_retryBroadcast(id)
 
     local current = snapshotGroup(self)
     for name in pairs(e.expected) do
-        if not current[name] then e.expected[name] = nil end
+        if current[name] == nil then e.expected[name] = nil end
     end
 
     local anyPending = false
@@ -252,6 +255,13 @@ function PP:StopPeriodicSync()
         PP._periodicSyncTicker:Cancel()
         PP._periodicSyncTicker = nil
     end
+end
+
+function PP:WipeRetryQueue()
+    for _, e in pairs(PP._retryQueue) do
+        if e.timerId then PP:CancelTimer(e.timerId) end
+    end
+    PP._retryQueue = {}
 end
 
 function PP:HandleRaidSettings(data, sender)
@@ -403,8 +413,8 @@ end
 
 -- Receive full sync data
 function PP:HandleSyncFull(data, sender)
-    PP._lastSyncFullReceived = GetTime()
     if not data or not data.guilds then return end
+    PP._lastSyncFullReceived = GetTime()
     -- Only accept data for guild keys we already know about or that match our
     -- own guild / active key.  This prevents foreign guild records from being
     -- auto-created in our database just because an officer has stale history.
@@ -548,6 +558,7 @@ function PP:HandleSessionCreate(data, sender)
         self:ScheduleTimer(function() self:RequestSync() end, 1)
     end
     self:Print("Session started: " .. (data.raid.name or data.raidID))
+    PP._seenAckIds = {}
     self:StartPeriodicSync()
     self:RefreshMainWindow()
 end
