@@ -14,7 +14,6 @@ local SYNC_INHIBIT_WINDOW    = 60   -- skip check if SYNC_FULL received within N
 
 PP._retryQueue           = {}
 PP._seenAckIds           = {}
-PP._ackCounter           = 0
 PP._lastSyncFullReceived = 0
 PP._periodicSyncTicker   = nil
 
@@ -184,8 +183,7 @@ end
 ---------------------------------------------------------------------------
 function PP:BroadcastCritical(msgType, data, maxRetries)
     if self._sandbox or not IsInGroup() then return end
-    PP._ackCounter = PP._ackCounter + 1
-    local id = PP._ackCounter
+    local id = string.format("%x-%x-%x", time(), math.random(0xFFFF), math.random(0x7FFFFFFF))
     data._ackId = id
     local entry = {
         msgType    = msgType,
