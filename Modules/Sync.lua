@@ -92,7 +92,7 @@ function PP:OnCommReceived(prefix, message, distribution, sender)
 
     -- ACK any critical broadcast so the sender can cancel whisper retries
     if data and data._ackId then
-        self:SendAddonMessage(PP.MSG.ACK, { ackId = data._ackId }, self:GetShortName(sender))
+        self:SendAddonMessage(PP.MSG.ACK, { ackId = data._ackId }, sender)
     end
 
     -- Dispatch
@@ -161,7 +161,7 @@ end
 
 -- Received a version-check broadcast: reply with our own version via whisper.
 function PP:HandleVersionRequest(sender)
-    self:SendAddonMessage(PP.MSG.VERSION_REPLY, { version = PP.VERSION }, self:GetShortName(sender))
+    self:SendAddonMessage(PP.MSG.VERSION_REPLY, { version = PP.VERSION }, sender)
 end
 
 -- Received a version reply: update the open version-check window if any.
@@ -220,7 +220,7 @@ function PP:_retryBroadcast(id)
     e.retries = e.retries + 1
     for name, acked in pairs(e.expected) do
         if not acked then
-            self:SendAddonMessage(e.msgType, e.data, self:GetShortName(name))
+            self:SendAddonMessage(e.msgType, e.data, name)
         end
     end
     e.timerId = self:ScheduleTimer(function() self:_retryBroadcast(id) end, RETRY_DELAY)
@@ -754,7 +754,7 @@ function PP:HandleLootStateQuery(sender, data)
         end
     end
 
-    self:SendAddonMessage(PP.MSG.LOOT_STATE_REPLY, { results = results }, self:GetShortName(sender))
+    self:SendAddonMessage(PP.MSG.LOOT_STATE_REPLY, { results = results }, sender)
 end
 
 -- Loot state reply: resolve stale pending loot entries on the querying client.

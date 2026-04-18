@@ -33,6 +33,7 @@ function PP.Session:End(reason, sessionID, guildKey)
 
     PP:StopPeriodicSync()
     PP:WipeRetryQueue()
+    PP._seenAckIds = {}
     PP.Repo.Roster:MarkSessionEnded(guildKey, sessionID, time(), reason)
     PP.Repo.Roster:ClearActiveSessionID(guildKey)
     PP.Repo.Loot:WipeAll()
