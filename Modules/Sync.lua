@@ -91,7 +91,7 @@ function PP:OnCommReceived(prefix, message, distribution, sender)
     if sender == me then return end
 
     -- ACK any critical broadcast so the sender can cancel whisper retries
-    if data and data._ackId then
+    if type(data) == "table" and data._ackId then
         self:SendAddonMessage(PP.MSG.ACK, { ackId = data._ackId }, sender)
     end
 
@@ -183,6 +183,7 @@ end
 -- recovery path if dropped (LOOT_POST, LOOT_AWARD, LOOT_CANCEL).
 ---------------------------------------------------------------------------
 function PP:BroadcastCritical(msgType, data, maxRetries)
+    if not IsInGroup() then return end
     PP._ackCounter = PP._ackCounter + 1
     local id = PP._ackCounter
     data._ackId = id
