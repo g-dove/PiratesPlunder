@@ -227,14 +227,6 @@ function PiratesPlunder:SlashCommand(input)
     self:Print("Unknown command. Type /pp help for usage.")
 end
 
-function PiratesPlunder:SlashCommandLoot()
-    if self:CanPostLoot() then
-        self:ToggleLootMasterWindow()
-    else
-        self:Print("You must be raid leader/assistant with an active session to use /pp loot.")
-    end
-end
-
 function PiratesPlunder:SlashCommandResponse()
     local frameVisible  = self.lootResponseFrame and self.lootResponseFrame:IsShown()
     local barsVisible   = self.lootBarsFrame and self.lootBarsFrame:IsShown()

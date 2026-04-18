@@ -1,11 +1,13 @@
 ---------------------------------------------------------------------------
--- Pirates Plunder – Dev/utility slash-command handlers
+-- Pirates Plunder – Slash-command handlers
 ---------------------------------------------------------------------------
 ---@type PPAddon
 local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 
 PP._commandGroups = PP._commandGroups or {}
 table.insert(PP._commandGroups, function(input)
+    -- Dev / utility ---------------------------------------------------------
+
     if input == "help" then
         PP:Print("/pp – Toggle main window")
         PP:Print("/pp loot (or /pp l) – Toggle loot-master window")
@@ -16,11 +18,15 @@ table.insert(PP._commandGroups, function(input)
         PP:Print("/pp session – Show or manage the active loot session")
         PP:Print("/pp roster – Add, remove, clear, or randomize roster entries")
         PP:Print("/pp status – Show officer detection info")
-        PP:Print("/pp bagdebug – Diagnose alt+right-click bag hook")
+        PP:Print("/pp minimap – Show or hide the minimap icon")
         return true
 
     elseif input == "loot" or input == "l" then
-        PP:SlashCommandLoot()
+        if PP:CanPostLoot() then
+            PP:ToggleLootMasterWindow()
+        else
+            PP:Print("You must be raid leader/assistant with an active session to use /pp loot.")
+        end
         return true
 
     elseif input == "response" or input == "r" then
@@ -61,11 +67,12 @@ table.insert(PP._commandGroups, function(input)
         PP:RefreshMainWindow()
         return true
 
-    elseif input == "bagdebug" then
-        PP:Print("GameTooltip shown: " .. tostring(GameTooltip:IsShown()))
-        local _, tipLink = GameTooltip:GetItem()
-        PP:Print("Tooltip item link: " .. tostring(tipLink))
-        PP:Print("IsMouseButtonDown RightButton: " .. tostring(IsMouseButtonDown("RightButton")))
+    elseif input == "minimap" then
+        if PP.db.global.minimapIcon.hide then
+            PP:ShowMinimapIcon()
+        else
+            PP:HideMinimapIcon()
+        end
         return true
 
     elseif input == "status" then
@@ -88,6 +95,50 @@ table.insert(PP._commandGroups, function(input)
         end
         PP:Print("Guild: " .. inGuild .. " (" .. myGuild .. ")  Active roster: " .. activeKey)
         PP:Print("Officer: " .. officer .. "  Can modify: " .. canMod .. "  API: " .. apiUsed)
+        return true
+
+    -- Session ---------------------------------------------------------------
+
+    elseif input == "session" then
+        if PP.Repo.Roster:HasActiveSession() then
+            local session, id = PP.Repo.Roster:GetActiveSession()
+            PP:Print("Active session: " .. (session and session.name or id))
+        else
+            PP:Print("No active session.")
+        end
+        return true
+
+    elseif input == "session new" or input:match("^session new%s+") then
+        local name = input:match("^session new%s+(.+)$")
+        PP.Session:Create(name)
+        return true
+
+    elseif input == "session end" then
+        if not PP:CanModify() then
+            PP:Print("Only officers can end a session.")
+            return true
+        end
+        PP.Session:End(PP.SESSION_END.OFFICER_ACTION)
+        return true
+
+    -- Roster ----------------------------------------------------------------
+
+    elseif input:match("^roster add%s+(.+)$") then
+        local name = input:match("^roster add%s+(.+)$")
+        PP.Roster:Add(name)
+        return true
+
+    elseif input:match("^roster remove%s+(.+)$") then
+        local name = input:match("^roster remove%s+(.+)$")
+        PP.Roster:Remove(name)
+        return true
+
+    elseif input == "roster clear" then
+        PP.Roster:Clear()
+        return true
+
+    elseif input == "roster randomize" then
+        PP.Roster:Randomize()
         return true
     end
 

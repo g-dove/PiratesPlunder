@@ -953,6 +953,25 @@ function PP:DrawSettingsTab(container)
     end
     scroll:AddChild(autoPassDesc)
 
+    -- ── Display section ──────────────────────────────────────────────────
+    local displayHead = AceGUI:Create("Heading")
+    displayHead:SetFullWidth(true)
+    displayHead:SetText("Display")
+    scroll:AddChild(displayHead)
+
+    local minimapChk = AceGUI:Create("CheckBox")
+    minimapChk:SetFullWidth(true)
+    minimapChk:SetLabel("Show minimap icon")
+    minimapChk:SetValue(not PP.db.global.minimapIcon.hide)
+    minimapChk:SetCallback("OnValueChanged", function(_, _, val)
+        if val then
+            PP:ShowMinimapIcon()
+        else
+            PP:HideMinimapIcon()
+        end
+    end)
+    scroll:AddChild(minimapChk)
+
     -- Status section
     local statusHead = AceGUI:Create("Heading")
     statusHead:SetFullWidth(true)
