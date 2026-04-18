@@ -87,6 +87,9 @@ function PP.Session:Create(raidName)
         return
     end
 
+    PP._seenAckIds = {}
+    PP._ackCounter = 0
+
     local sessionID = tostring(time()) .. "-" .. math.random(1000, 9999)
     local leader    = PP:GetPlayerFullName()
     local gk        = PP:GetActiveGuildKey()

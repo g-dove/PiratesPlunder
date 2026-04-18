@@ -14,6 +14,7 @@ local SYNC_INHIBIT_WINDOW    = 60   -- skip check if SYNC_FULL received within N
 
 PP._retryQueue           = {}
 PP._seenAckIds           = {}
+PP._ackCounter           = 0
 PP._lastSyncFullReceived = 0
 PP._periodicSyncTicker   = nil
 
@@ -35,11 +36,21 @@ local MSG_PRIORITY = {
 
 local function snapshotGroup(self)
     local members, me = {}, self:GetPlayerFullName()
-    for i = 1, GetNumGroupMembers() do
-        local name, _, _, _, _, _, _, online = GetRaidRosterInfo(i)
-        if name and online then
-            local full = self:GetFullName(name)
-            if full ~= me then members[full] = false end
+    if IsInRaid() then
+        for i = 1, GetNumGroupMembers() do
+            local name, _, _, _, _, _, _, online = GetRaidRosterInfo(i)
+            if name and online then
+                local full = self:GetFullName(name)
+                if full ~= me then members[full] = false end
+            end
+        end
+    else
+        for i = 1, 4 do
+            local unit = "party" .. i
+            if UnitExists(unit) then
+                local full = self:GetFullName(UnitName(unit))
+                if full ~= me then members[full] = false end
+            end
         end
     end
     return members
@@ -169,7 +180,8 @@ end
 -- recovery path if dropped (LOOT_POST, LOOT_AWARD, LOOT_CANCEL).
 ---------------------------------------------------------------------------
 function PP:BroadcastCritical(msgType, data, maxRetries)
-    local id = math.random(1, 2147483647)
+    PP._ackCounter = PP._ackCounter + 1
+    local id = PP._ackCounter
     data._ackId = id
     local entry = {
         msgType    = msgType,
@@ -240,7 +252,6 @@ function PP:StopPeriodicSync()
         PP._periodicSyncTicker:Cancel()
         PP._periodicSyncTicker = nil
     end
-    PP._seenAckIds = {}
 end
 
 function PP:HandleRaidSettings(data, sender)
@@ -604,8 +615,9 @@ end
 function PP:HandleLootPost(data, sender)
     if not data or not data.key then return end
     if data._ackId then
-        if PP._seenAckIds[data._ackId] then return end
-        PP._seenAckIds[data._ackId] = true
+        local key = sender .. ":" .. tostring(data._ackId)
+        if PP._seenAckIds[key] then return end
+        PP._seenAckIds[key] = true
     end
     -- Store locally so we can respond
     PP.Repo.Loot:SetEntry(data.key, {
@@ -637,8 +649,9 @@ end
 function PP:HandleLootAward(data, sender)
     if not data or not data.key then return end
     if data._ackId then
-        if PP._seenAckIds[data._ackId] then return end
-        PP._seenAckIds[data._ackId] = true
+        local key = sender .. ":" .. tostring(data._ackId)
+        if PP._seenAckIds[key] then return end
+        PP._seenAckIds[key] = true
     end
     -- Record item in raid history for all clients
     if data.itemLink and data.awardedTo then
@@ -765,8 +778,9 @@ end
 function PP:HandleLootCancel(data, sender)
     if not data or not data.key then return end
     if data._ackId then
-        if PP._seenAckIds[data._ackId] then return end
-        PP._seenAckIds[data._ackId] = true
+        local key = sender .. ":" .. tostring(data._ackId)
+        if PP._seenAckIds[key] then return end
+        PP._seenAckIds[key] = true
     end
     PP.Repo.Loot:ClearEntry(data.key)
     if self.lootPopups[data.key] then
