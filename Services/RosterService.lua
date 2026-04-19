@@ -11,10 +11,15 @@ PP.Roster = PP.Roster or {}
 -- Private helpers
 ---------------------------------------------------------------------------
 
--- Bump version, broadcast, and redraw after any roster mutation.
 local function CommitRosterChange()
     PP.Repo.Roster:BumpRosterVersion()
     PP:BroadcastRoster()
+    PP:RefreshMainWindow()
+end
+
+local function CommitRosterDelta(changed, removed)
+    PP.Repo.Roster:BumpRosterVersion()
+    PP:BroadcastRosterDelta(changed, removed)
     PP:RefreshMainWindow()
 end
 
@@ -43,7 +48,7 @@ function PP.Roster:Add(fullName)
         return
     end
     roster[fullName] = NewEntry(fullName)
-    CommitRosterChange()
+    CommitRosterDelta({[fullName] = roster[fullName]}, nil)
 end
 
 ---------------------------------------------------------------------------
@@ -57,7 +62,7 @@ function PP.Roster:Remove(fullName)
     end
     fullName = PP:GetFullName(fullName)
     PP.Repo.Roster:GetRoster()[fullName] = nil
-    CommitRosterChange()
+    CommitRosterDelta(nil, {fullName})
 end
 
 ---------------------------------------------------------------------------
@@ -77,7 +82,7 @@ function PP.Roster:SetScore(fullName, newScore)
     end
     newScore = tonumber(newScore) or 0
     roster[fullName].score = newScore
-    CommitRosterChange()
+    CommitRosterDelta({[fullName] = roster[fullName]}, nil)
     PP:Print(PP:GetShortName(fullName) .. " score set to " .. newScore)
 end
 
@@ -164,16 +169,21 @@ function PP.Roster:AddScoreToRaidMembers(amount)
     if not IsInRaid() then return end
     local roster = PP.Repo.Roster:GetRoster()
     local count = GetNumGroupMembers()
+    local anyUpdated = false
     for i = 1, count do
         local name = GetRaidRosterInfo(i)
         if name then
             local fullName = PP:GetFullName(name)
             if roster[fullName] then
                 roster[fullName].score = roster[fullName].score + amount
+                anyUpdated = true
             end
         end
     end
-    CommitRosterChange()
+    if not anyUpdated then return end
+    PP.Repo.Roster:BumpRosterVersion()
+    PP:BroadcastGroupScore(amount)
+    PP:RefreshMainWindow()
 end
 
 ---------------------------------------------------------------------------

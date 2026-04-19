@@ -30,6 +30,9 @@
 ---@field LOOT_STATE_REPLY string
 ---@field VERSION_REQUEST  string
 ---@field VERSION_REPLY    string
+---@field ROSTER_DELTA     string
+---@field GROUP_SCORE      string
+---@field GROUP_SCORE_ACK  string
 
 ---@class PPResponseConstants
 ---@field NEED     string
@@ -482,6 +485,11 @@ function PPAddon:BroadcastRaidSettings() end
 function PPAddon:HandleRaidSettings(data, sender) end
 
 function PPAddon:BroadcastRoster() end
+function PPAddon:BroadcastRosterDelta(changed, removed) end
+function PPAddon:HandleRosterDelta(data, sender) end
+function PPAddon:BroadcastGroupScore(amount) end
+function PPAddon:HandleGroupScore(data, sender) end
+function PPAddon:HandleGroupScoreAck(data, sender) end
 
 ---@param sessionID string
 function PPAddon:BroadcastSessionCreate(sessionID) end

@@ -43,6 +43,9 @@ PiratesPlunder.MSG = {
     VERSION_REQUEST   = "VER_REQ",
     VERSION_REPLY     = "VER_REP",
     ACK               = "ACK",
+    ROSTER_DELTA      = "ROS_DEL",
+    GROUP_SCORE       = "GRP_SCR",
+    GROUP_SCORE_ACK   = "GRP_ACK",
 }
 
 -- Loot response types
@@ -625,6 +628,24 @@ function PiratesPlunder:OnGroupRosterUpdate()
         end, 3) -- delay lets the comms channel open and officers load in
     end
     self._wasInGroup = nowInGroup
+
+    if self:CanModify() and PP.Repo.Roster:HasActiveSession() and IsInRaid() then
+        if not self._knownRaidMembers then self._knownRaidMembers = {} end
+        local gk = self:GetActiveGuildKey()
+        for i = 1, GetNumGroupMembers() do
+            local name = GetRaidRosterInfo(i)
+            if name then
+                local full = self:GetFullName(name)
+                if not self._knownRaidMembers[full] then
+                    self._knownRaidMembers[full] = true
+                    self:ScheduleTimer(function() self:SendFullSync(full, gk) end, 2)
+                end
+            end
+        end
+    end
+    if not nowInGroup then
+        self._knownRaidMembers = nil
+    end
 
     -- If a deferred session-end is pending and we are still in a group, cancel it
     if self.db.global.pendingSessionEnd and nowInGroup then

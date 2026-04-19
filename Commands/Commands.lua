@@ -67,6 +67,15 @@ table.insert(PP._commandGroups, function(input)
         PP:RefreshMainWindow()
         return true
 
+    elseif input == "debug" then
+        PP._debug = not PP._debug
+        if PP._debug then
+            PP:Print("|cFFFFD100[Debug] Sync debug ON. Hash/delta events will print to chat.|r")
+        else
+            PP:Print("|cFF888888[Debug] Sync debug OFF.|r")
+        end
+        return true
+
     elseif input == "minimap" then
         if PP.db.global.minimapIcon.hide then
             PP:ShowMinimapIcon()
