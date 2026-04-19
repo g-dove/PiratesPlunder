@@ -31,6 +31,9 @@ function PP.Session:End(reason, sessionID, guildKey)
     sessionID = sessionID or (gd and gd.activeSessionID)
     if not sessionID then return end
 
+    PP:StopPeriodicSync()
+    PP:WipeRetryQueue()
+    PP._seenAckIds = {}
     PP.Repo.Roster:MarkSessionEnded(guildKey, sessionID, time(), reason)
     PP.Repo.Roster:ClearActiveSessionID(guildKey)
     PP.Repo.Loot:WipeAll()
@@ -86,6 +89,9 @@ function PP.Session:Create(raidName)
         return
     end
 
+    PP:WipeRetryQueue()
+    PP._seenAckIds = {}
+
     local sessionID = tostring(time()) .. "-" .. math.random(1000, 9999)
     local leader    = PP:GetPlayerFullName()
     local gk        = PP:GetActiveGuildKey()
@@ -117,6 +123,7 @@ function PP.Session:Create(raidName)
 
     PP:Print("Session created: " .. raidName)
     PP:BroadcastSessionCreate(sessionID)
+    PP:StartPeriodicSync()
     PP:RefreshMainWindow()
 end
 

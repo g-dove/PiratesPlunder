@@ -93,7 +93,7 @@ function PP.Loot:Post(itemLink)
     })
 
     -- Broadcast to raid (other players will show their own popup via HandleLootPost)
-    PP:SendAddonMessage(PP.MSG.LOOT_POST, {
+    PP:BroadcastCritical(PP.MSG.LOOT_POST, {
         key           = key,
         itemLink      = itemLink,
         itemID        = itemID,
@@ -117,7 +117,7 @@ function PP.Loot:Cancel(key)
     if not PP.Repo.Loot:GetEntry(key) then return end
     PP.Repo.Loot:ClearEntry(key)
 
-    PP:SendAddonMessage(PP.MSG.LOOT_CANCEL, { key = key })
+    PP:BroadcastCritical(PP.MSG.LOOT_CANCEL, { key = key })
     PP:RefreshLootMasterWindow()
     PP:RefreshLootResponseFrame()
 end
@@ -192,7 +192,7 @@ function PP.Loot:Award(key, fullName, free)
     )
 
     -- Broadcast award (include score data so all clients apply correct deduction)
-    PP:SendAddonMessage(PP.MSG.LOOT_AWARD, {
+    PP:BroadcastCritical(PP.MSG.LOOT_AWARD, {
         key         = key,
         itemLink    = entry.itemLink,
         itemID      = entry.itemID,
