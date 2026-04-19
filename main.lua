@@ -574,7 +574,7 @@ end
 local _lootKeyIndex = 0
 function PiratesPlunder:LootKey(itemLink)
     _lootKeyIndex = _lootKeyIndex + 1
-    return tostring(itemLink) .. ":" .. tostring(GetTime()) .. ":" .. _lootKeyIndex
+    return tostring(itemLink) .. ":" .. tostring(time()) .. ":" .. _lootKeyIndex
 end
 
 ---------------------------------------------------------------------------

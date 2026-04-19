@@ -7,6 +7,19 @@
 local PP  = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 local AceGUI = PP.AceGUI
 
+-- Stable sort for pending loot entries. Keys have the format
+-- "itemLink:timestamp:index". Sort primarily by timestamp so order is
+-- chronological across reloads; use index as a tiebreaker within the
+-- same second (_lootKeyIndex resets on reload so index alone is not stable).
+local function lootEntrySortLess(a, b)
+    local ta, ia = a.key:match(":([%d%.]+):(%d+)$")
+    local tb, ib = b.key:match(":([%d%.]+):(%d+)$")
+    ta, ia = tonumber(ta) or 0, tonumber(ia) or 0
+    tb, ib = tonumber(tb) or 0, tonumber(ib) or 0
+    if ta == tb then return ia < ib end
+    return ta < tb
+end
+
 -- =========================================================================
 --  LOOT-MASTER WINDOW
 -- =========================================================================
@@ -33,7 +46,7 @@ function PP:CreateLootMasterWindow()
     local f = AceGUI:Create("Frame")
     f:SetTitle("Pirates Plunder – Loot Master")
     f:SetLayout("Fill")
-    f:SetWidth(800)
+    f:SetWidth(850)
     f:SetHeight(500)
     f:SetCallback("OnClose", function(widget)
         AceGUI:Release(widget)
@@ -151,6 +164,7 @@ function PP:DrawLootMasterContent(container)
     container:AddChild(heading)
 
     local pending = self:GetPendingLootList()
+    table.sort(pending, lootEntrySortLess)
 
     if #pending == 0 then
         local empty = AceGUI:Create("Label")
@@ -168,11 +182,16 @@ function PP:DrawLootMasterContent(container)
         container:AddChild(itemGroup)
 
         -- Tooltip only when hovering the item name in the title bar
-        local titleOverlay = CreateFrame("Frame", nil, itemGroup.frame)
+        local titleOverlay = itemGroup.frame._ppOverlay
+        if not titleOverlay then
+            titleOverlay = CreateFrame("Frame", nil, itemGroup.frame)
+            titleOverlay:SetHeight(18)
+            itemGroup.frame._ppOverlay = titleOverlay
+        end
+        titleOverlay:ClearAllPoints()
         titleOverlay:SetPoint("TOPLEFT",  itemGroup.frame, "TOPLEFT",  14, -1)
         titleOverlay:SetPoint("TOPRIGHT", itemGroup.frame, "TOPRIGHT", -14, -1)
-        titleOverlay:SetHeight(18)
-        titleOverlay:EnableMouse(true)
+        titleOverlay:Show()
         self:AddItemTooltip(titleOverlay, item.itemLink)
 
         -- Response count info
@@ -497,19 +516,6 @@ function PP:AddItemTooltip(frame, itemLink)
     frame:SetScript("OnLeave", function()
         GameTooltip:Hide()
     end)
-end
-
--- Stable sort for pending loot entries. Keys have the format
--- "itemLink:timestamp:index". Sort primarily by timestamp so order is
--- chronological across reloads; use index as a tiebreaker within the
--- same second (_lootKeyIndex resets on reload so index alone is not stable).
-local function lootEntrySortLess(a, b)
-    local ta, ia = a.key:match(":([%d%.]+):(%d+)$")
-    local tb, ib = b.key:match(":([%d%.]+):(%d+)$")
-    ta, ia = tonumber(ta) or 0, tonumber(ia) or 0
-    tb, ib = tonumber(tb) or 0, tonumber(ib) or 0
-    if ta == tb then return ia < ib end
-    return ta < tb
 end
 
 -- =========================================================================
