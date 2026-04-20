@@ -41,6 +41,7 @@ local MSG_PRIORITY = {
     [PP.MSG.SESSION_CLOSE]    = "ALERT",
     [PP.MSG.ACK]              = "ALERT",
     [PP.MSG.ROSTER_DELTA]     = "ALERT",
+    [PP.MSG.GROUP_SCORE]      = "ALERT",
     [PP.MSG.GROUP_SCORE_ACK]  = "ALERT",
     [PP.MSG.SYNC_REQUEST]     = "BULK",
     [PP.MSG.LOOT_STATE_QUERY] = "BULK",
@@ -80,12 +81,14 @@ end
 function PP:SendAddonMessage(msgType, data, target)
     if self._sandbox then return end
     if type(data) == "table" and data._ackId then
-        local gk = self:GetActiveGuildKey()
-        local gd = PP.Repo.Roster:GetData(gk)
-        local h  = gd and ComputeRosterHash(gd.roster) or nil
         if not PP._criticalAckSnapshots then PP._criticalAckSnapshots = {} end
-        PP._criticalAckSnapshots[data._ackId] = { hash = h, guildKey = gk, rosterVersion = gd and gd.rosterVersion or nil }
-        PP._lastRosterHash = h
+        if not PP._criticalAckSnapshots[data._ackId] then
+            local gk = self:GetActiveGuildKey()
+            local gd = PP.Repo.Roster:GetData(gk)
+            local h  = gd and ComputeRosterHash(gd.roster) or nil
+            PP._criticalAckSnapshots[data._ackId] = { hash = h, guildKey = gk, rosterVersion = gd and gd.rosterVersion or nil }
+            PP._lastRosterHash = h
+        end
     end
     local payload = self:Serialize(msgType, data)
     local prio    = MSG_PRIORITY[msgType] or "NORMAL"
@@ -113,7 +116,7 @@ function PP:OnCommReceived(prefix, message, distribution, sender)
     if sender == me then return end
 
     if type(data) == "table" and data._ackId then
-        local gk = self:GetActiveGuildKey()
+        local gk = (type(data) == "table" and data.guildKey) or self:GetActiveGuildKey()
         local gd = PP.Repo.Roster:GetData(gk)
         self:SendAddonMessage(PP.MSG.ACK, {
             ackId         = data._ackId,
@@ -284,6 +287,9 @@ function PP:_handleAck(data, sender)
                     self:ScheduleTimer(function() self:SendFullSync(sender, snap.guildKey) end, 0.5)
                 end
             end
+        end
+        if not e and PP._criticalAckSnapshots then
+            PP._criticalAckSnapshots[data.ackId] = nil
         end
     end
 end
