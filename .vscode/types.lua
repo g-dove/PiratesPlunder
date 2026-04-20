@@ -504,9 +504,8 @@ function PPAddon:BroadcastSessionDelete(sessionID, guildKey, newVersion) end
 
 function PPAddon:RequestSync() end
 
----@param target string
 ---@param guildKey? string
-function PPAddon:SendFullSync(target, guildKey) end
+function PPAddon:SendFullSync(guildKey) end
 
 ---@param sender string
 ---@param data   table

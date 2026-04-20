@@ -986,7 +986,7 @@ function PP:DrawSettingsTab(container)
     local rVer      = gd and gd.rosterVersion or 0
     local inGroup   = IsInGroup()             and "|cFF00FF00Yes|r" or "|cFFAAAAAA No|r"
     local rawHash   = gd and PP.ComputeRosterHash and PP.ComputeRosterHash(gd.roster)
-    local hashStr   = rawHash and string.format("0x%08X", rawHash) or "|cFFAAAAAAnone|r"
+    local hashStr   = rawHash and string.format("|cFFFFFFFF0x%08X|r", rawHash) or "|cFFAAAAAAnone|r"
 
     local statusLabel = AceGUI:Create("Label")
     statusLabel:SetFullWidth(true)
@@ -996,7 +996,7 @@ function PP:DrawSettingsTab(container)
      .. "Officer:  " .. officer .. "\n"
      .. "Can modify:  " .. canMod .. "\n"
      .. "Roster version:  |cFFFFFFFF" .. rVer .. "|r\n"
-     .. "Roster hash:  |cFFFFFFFF" .. hashStr .. "|r\n"
+     .. "Roster hash:  " .. hashStr .. "\n"
      .. "In group:  " .. inGroup
     )
     scroll:AddChild(statusLabel)

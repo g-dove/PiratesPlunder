@@ -49,8 +49,8 @@ local MSG_PRIORITY = {
     [PP.MSG.SYNC_REQUEST]     = "ALERT",
     [PP.MSG.LOOT_STATE_QUERY] = "BULK",
     [PP.MSG.RAID_SETTINGS]    = "BULK",
-    [PP.MSG.VERSION_REQUEST]  = "BULK",
-    [PP.MSG.VERSION_REPLY]    = "BULK",
+    [PP.MSG.VERSION_REQUEST]  = "ALERT",
+    [PP.MSG.VERSION_REPLY]    = "ALERT",
 }
 
 local function snapshotGroup(self)
@@ -498,8 +498,12 @@ function PP:HandleSyncRequest(sender, data)
     local sessionMismatch   = (myActiveID ~= requesterActiveID)
                            and (myActiveID ~= nil or requesterActiveID ~= nil)
                            and myActiveID ~= nil
-    local rosterSynced = (data and data.hash and ComputeRosterHash(gd.roster) == data.hash)
-                      or (requesterVersion >= gd.rosterVersion)
+    local rosterSynced
+    if data and data.hash then
+        rosterSynced = (ComputeRosterHash(gd.roster) == data.hash)
+    else
+        rosterSynced = (requesterVersion >= gd.rosterVersion)
+    end
     if rosterSynced and requesterRaidItems >= myRaidItems and not sessionMismatch then return end
     -- Random jitter 0.3-1.5 s so multiple officers don't reply simultaneously
     local delay = 0.3 + math.random() * 1.2

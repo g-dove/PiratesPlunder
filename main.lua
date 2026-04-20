@@ -625,6 +625,7 @@ function PiratesPlunder:OnGroupRosterUpdate()
     -- Auto-request sync when first joining a group
     if nowInGroup and not self._wasInGroup then
         self:ScheduleTimer(function()
+            self:SendAddonMessage(PP.MSG.VERSION_REQUEST, {})
             self:RequestSync()
         end, 3) -- delay lets the comms channel open and officers load in
     end
