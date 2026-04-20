@@ -630,7 +630,7 @@ function PiratesPlunder:OnGroupRosterUpdate()
     self._wasInGroup = nowInGroup
 
     if not nowInGroup then
-        self._knownRaidMembers = nil
+        PP._ppUsers = nil
     end
 
     -- If a deferred session-end is pending and we are still in a group, cancel it

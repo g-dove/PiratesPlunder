@@ -43,7 +43,7 @@ local MSG_PRIORITY = {
     [PP.MSG.ROSTER_DELTA]     = "ALERT",
     [PP.MSG.GROUP_SCORE]      = "ALERT",
     [PP.MSG.GROUP_SCORE_ACK]  = "ALERT",
-    [PP.MSG.SYNC_REQUEST]     = "BULK",
+    [PP.MSG.SYNC_REQUEST]     = "ALERT",
     [PP.MSG.LOOT_STATE_QUERY] = "BULK",
     [PP.MSG.RAID_SETTINGS]    = "BULK",
     [PP.MSG.VERSION_REQUEST]  = "BULK",
@@ -114,6 +114,8 @@ function PP:OnCommReceived(prefix, message, distribution, sender)
     local me = self:GetPlayerFullName()
     sender = self:GetFullName(sender)
     if sender == me then return end
+    PP._ppUsers = PP._ppUsers or {}
+    PP._ppUsers[sender] = true
 
     if type(data) == "table" and data._ackId then
         local gk = (type(data) == "table" and data.guildKey) or self:GetActiveGuildKey()
@@ -237,6 +239,22 @@ function PP:BroadcastCritical(msgType, data, maxRetries)
     entry.timerId = self:ScheduleTimer(function() self:_retryBroadcast(id) end, RETRY_DELAY)
 end
 
+function PP:SendCriticalWhisper(target, msgType, data, maxRetries)
+    if self._sandbox or not IsInGroup() then return end
+    local id = newAckId()
+    data._ackId = id
+    local entry = {
+        msgType    = msgType,
+        data       = data,
+        expected   = { [target] = false },
+        retries    = 0,
+        maxRetries = maxRetries or MAX_RETRIES,
+    }
+    PP._retryQueue[id] = entry
+    self:SendAddonMessage(msgType, data, target)
+    entry.timerId = self:ScheduleTimer(function() self:_retryBroadcast(id) end, RETRY_DELAY)
+end
+
 function PP:_retryBroadcast(id)
     local e = PP._retryQueue[id]
     if not e then return end
@@ -259,7 +277,7 @@ function PP:_retryBroadcast(id)
 
     e.retries = e.retries + 1
     for name, acked in pairs(e.expected) do
-        if not acked then
+        if not acked and PP._ppUsers and PP._ppUsers[name] then
             self:SendAddonMessage(e.msgType, e.data, name)
         end
     end
@@ -409,8 +427,6 @@ function PP:RequestSync()
     if not IsInGroup() then return end
     local gk = self:GetActiveGuildKey()
     local gd = PP.Repo.Roster:GetData(gk)
-    -- If we have no local record at all, send floor values so any officer with
-    -- data for this guild key will see us as behind and respond with SYNC_FULL.
     local rosterVersion   = gd and gd.rosterVersion   or -1
     local activeSessionID = gd and gd.activeSessionID or nil
     local raidItemCount   = 0
@@ -419,13 +435,28 @@ function PP:RequestSync()
             raidItemCount = raidItemCount + #(session.items or {})
         end
     end
-    self:SendAddonMessage(PP.MSG.SYNC_REQUEST, {
+    local payload = {
         guildKey        = gk,
         rosterVersion   = rosterVersion,
         raidItemCount   = raidItemCount,
         activeSessionID = activeSessionID,
         hash            = gd and ComputeRosterHash(gd.roster) or nil,
-    })
+    }
+    if IsInRaid() then
+        local leaderName
+        for i = 1, GetNumGroupMembers() do
+            local name, rank = GetRaidRosterInfo(i)
+            if rank == 2 and name then
+                leaderName = self:GetFullName(name)
+                break
+            end
+        end
+        if leaderName then
+            self:SendCriticalWhisper(leaderName, PP.MSG.SYNC_REQUEST, payload)
+            return
+        end
+    end
+    self:SendAddonMessage(PP.MSG.SYNC_REQUEST, payload)
 end
 
 function PP:SendFullSync(target, guildKey)
@@ -559,22 +590,22 @@ function PP:HandleSyncFull(data, sender)
                     end
                 end
             end
-            if incoming.activeSessionID then
+            local incomingSessionVer = incoming.activeSessionVersion or 0
+            local localSessionVer    = local_gd.activeSessionVersion or 0
+            if incoming.activeSessionID and incomingSessionVer >= localSessionVer then
                 local incomingID = incoming.activeSessionID
-                -- End any conflicting locally-active session before adopting the synced one.
                 local existingID = local_gd.activeSessionID
                 if existingID and existingID ~= incomingID
                    and local_gd.sessions[existingID]
                    and local_gd.sessions[existingID].active then
                     PP.Session:End(PP.SESSION_END.SYNC_FULL, existingID, gk)
                 end
-                local_gd.activeSessionID = incomingID
-                -- Part 3: if we previously ended this session prematurely, restore it
+                local_gd.activeSessionID      = incomingID
+                local_gd.activeSessionVersion = incomingSessionVer
                 if local_gd.sessions[incomingID] and not local_gd.sessions[incomingID].active then
                     local_gd.sessions[incomingID].active  = true
                     local_gd.sessions[incomingID].endTime = nil
                 end
-                -- Cancel any deferred session end that referenced this session
                 if self.db.global.pendingSessionEnd
                     and self.db.global.pendingSessionEnd.sessionID == incomingID then
                     self.db.global.pendingSessionEnd = nil
@@ -583,10 +614,6 @@ function PP:HandleSyncFull(data, sender)
                         self._pendingSessionEndTimer = nil
                     end
                 end
-                -- A restored session may make us the active leader; re-run the
-                -- leader check so the "Continue?" prompt fires if we hold rank 2.
-                -- Gate on active guild key to avoid redundant calls if the sync
-                -- payload happens to contain multiple guild keys.
                 if IsInRaid() and gk == activeKey then
                     PP.Session:CheckLeaderPresent()
                 end
