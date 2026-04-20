@@ -985,7 +985,8 @@ function PP:DrawSettingsTab(container)
     local gd        = PP.Repo.Roster:GetData(guildKey)
     local rVer      = gd and gd.rosterVersion or 0
     local inGroup   = IsInGroup()             and "|cFF00FF00Yes|r" or "|cFFAAAAAA No|r"
-    local hashStr   = PP._lastRosterHash and string.format("0x%08X", PP._lastRosterHash) or "|cFFAAAAAAnone|r"
+    local rawHash   = gd and PP.ComputeRosterHash and PP.ComputeRosterHash(gd.roster)
+    local hashStr   = rawHash and string.format("0x%08X", rawHash) or "|cFFAAAAAAnone|r"
 
     local statusLabel = AceGUI:Create("Label")
     statusLabel:SetFullWidth(true)

@@ -7,8 +7,9 @@ local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 ---------------------------------------------------------------------------
 -- Reliable broadcast state
 ---------------------------------------------------------------------------
-local RETRY_DELAY  = 4  -- seconds between whisper retry attempts
-local MAX_RETRIES  = 3  -- max whisper retries before giving up
+local RETRY_DELAY       = 4   -- seconds between whisper retry attempts
+local MAX_RETRIES       = 3   -- max whisper retries before giving up
+local FULL_SYNC_COOLDOWN = 10 -- seconds before another full sync can broadcast
 
 PP._retryQueue  = {}
 PP._seenAckIds  = {}
@@ -31,6 +32,8 @@ local function ComputeRosterHash(roster)
     end
     return h
 end
+
+PP.ComputeRosterHash = ComputeRosterHash
 
 local MSG_PRIORITY = {
     [PP.MSG.LOOT_POST]        = "ALERT",
@@ -239,22 +242,6 @@ function PP:BroadcastCritical(msgType, data, maxRetries)
     entry.timerId = self:ScheduleTimer(function() self:_retryBroadcast(id) end, RETRY_DELAY)
 end
 
-function PP:SendCriticalWhisper(target, msgType, data, maxRetries)
-    if self._sandbox or not IsInGroup() then return end
-    local id = newAckId()
-    data._ackId = id
-    local entry = {
-        msgType    = msgType,
-        data       = data,
-        expected   = { [target] = false },
-        retries    = 0,
-        maxRetries = maxRetries or MAX_RETRIES,
-    }
-    PP._retryQueue[id] = entry
-    self:SendAddonMessage(msgType, data, target)
-    entry.timerId = self:ScheduleTimer(function() self:_retryBroadcast(id) end, RETRY_DELAY)
-end
-
 function PP:_retryBroadcast(id)
     local e = PP._retryQueue[id]
     if not e then return end
@@ -302,7 +289,7 @@ function PP:_handleAck(data, sender)
                     self:Print("[Sync] ACK hash from " .. self:GetShortName(sender) .. ": " .. label)
                 end
                 if not match then
-                    self:ScheduleTimer(function() self:SendFullSync(sender, snap.guildKey) end, 0.5)
+                    self:ScheduleTimer(function() self:SendFullSync(snap.guildKey) end, 0.5)
                 end
             end
         end
@@ -442,29 +429,21 @@ function PP:RequestSync()
         activeSessionID = activeSessionID,
         hash            = gd and ComputeRosterHash(gd.roster) or nil,
     }
-    if IsInRaid() then
-        local leaderName
-        for i = 1, GetNumGroupMembers() do
-            local name, rank = GetRaidRosterInfo(i)
-            if rank == 2 and name then
-                leaderName = self:GetFullName(name)
-                break
-            end
-        end
-        if leaderName then
-            self:SendCriticalWhisper(leaderName, PP.MSG.SYNC_REQUEST, payload)
-            return
-        end
-    end
     self:SendAddonMessage(PP.MSG.SYNC_REQUEST, payload)
 end
 
-function PP:SendFullSync(target, guildKey)
-    if PP._debug then
-        self:Print("[Sync] Sending full sync to " .. self:GetShortName(target) .. (guildKey and (" [" .. guildKey .. "]") or " [all guilds]"))
+function PP:SendFullSync(guildKey)
+    local now = time()
+    if PP._lastFullSyncSent and (now - PP._lastFullSyncSent) < FULL_SYNC_COOLDOWN then
+        if PP._debug then
+            self:Print("[Sync] Full sync suppressed (cooldown)")
+        end
+        return
     end
-    -- Send only the requested guild's data; sending all keys is wasteful and
-    -- risks the receiver merging data for guilds it has no context for.
+    PP._lastFullSyncSent = now
+    if PP._debug then
+        self:Print("[Sync] Full sync broadcast" .. (guildKey and (" [" .. guildKey .. "]") or " [all guilds]"))
+    end
     local guilds = {}
     if guildKey then
         local gd = PP.Repo.Roster:GetData(guildKey)
@@ -479,7 +458,7 @@ function PP:SendFullSync(target, guildKey)
         raidSettings = {
             autoPassEpicRolls = self.db.global.autoPassEpicRolls,
         },
-    }, target)
+    })
 end
 
 ---------------------------------------------------------------------------
@@ -525,7 +504,7 @@ function PP:HandleSyncRequest(sender, data)
     -- Random jitter 0.3-1.5 s so multiple officers don't reply simultaneously
     local delay = 0.3 + math.random() * 1.2
     self:ScheduleTimer(function()
-        self:SendFullSync(sender, gk)
+        self:SendFullSync(gk)
     end, delay)
 end
 
@@ -719,7 +698,7 @@ function PP:HandleGroupScoreAck(data, sender)
         self:Print("[Sync] Hash ACK from " .. self:GetShortName(sender) .. ": " .. label)
     end
     if not match and data.guildKey then
-        self:SendFullSync(sender, data.guildKey)
+        self:SendFullSync(data.guildKey)
     end
 end
 

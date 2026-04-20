@@ -87,6 +87,7 @@ local defaults = {
 -- Lifecycle callbacks
 ---------------------------------------------------------------------------
 function PiratesPlunder:OnInitialize()
+    math.randomseed(time() + math.floor(GetTime() * 1000))
     self.db = LibStub("AceDB-3.0"):New("PiratesPlunderDB", defaults, true)
 
     -- One-time migration: move legacy flat roster/raids into per-guild structure
