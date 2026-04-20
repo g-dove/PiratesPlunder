@@ -92,7 +92,6 @@ function PP:SendAddonMessage(msgType, data, target)
             local gd = PP.Repo.Roster:GetData(gk)
             local h  = gd and ComputeRosterHash(gd.roster) or nil
             PP._criticalAckSnapshots[data._ackId] = { hash = h, guildKey = gk, rosterVersion = gd and gd.rosterVersion or nil }
-            PP._lastRosterHash = h
         end
     end
     local payload = self:Serialize(msgType, data)
