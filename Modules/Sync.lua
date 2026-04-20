@@ -14,8 +14,10 @@ local FULL_SYNC_COOLDOWN = 10 -- seconds before another full sync can broadcast
 PP._retryQueue  = {}
 PP._seenAckIds  = {}
 
+local _ackCounter = 0
 local function newAckId()
-    return string.format("%x-%x-%x", time(), math.random(0xFFFF), math.random(0x7FFFFFFF))
+    _ackCounter = _ackCounter + 1
+    return string.format("%x-%x-%x", time(), math.floor(GetTime() * 1000) % 0x10000, _ackCounter)
 end
 
 local function ComputeRosterHash(roster)
