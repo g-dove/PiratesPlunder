@@ -83,7 +83,7 @@ function PP:SendAddonMessage(msgType, data, target)
     if type(data) == "table" and data._ackId then
         if not PP._criticalAckSnapshots then PP._criticalAckSnapshots = {} end
         if not PP._criticalAckSnapshots[data._ackId] then
-            local gk = self:GetActiveGuildKey()
+            local gk = data.guildKey or self:GetActiveGuildKey()
             local gd = PP.Repo.Roster:GetData(gk)
             local h  = gd and ComputeRosterHash(gd.roster) or nil
             PP._criticalAckSnapshots[data._ackId] = { hash = h, guildKey = gk, rosterVersion = gd and gd.rosterVersion or nil }
@@ -333,7 +333,6 @@ function PP:BroadcastRoster()
         version  = gd.rosterVersion,
         guildKey = gk,
         hash     = ComputeRosterHash(gd.roster),
-        _ackId   = newAckId(),
     })
 end
 
@@ -470,7 +469,6 @@ function PP:HandleSyncRequest(sender, data)
     -- Only respond when we have an active session — without one there is nothing
     -- meaningful to restore and we avoid syncing roster data to non-members.
     if not gd.activeSessionID then return end
-    if data and data.hash and ComputeRosterHash(gd.roster) == data.hash then return end
     local requesterVersion   = data and data.rosterVersion   or -1
     local requesterRaidItems = data and data.raidItemCount   or -1
     -- Count our own awarded items across all sessions
@@ -490,8 +488,9 @@ function PP:HandleSyncRequest(sender, data)
     local sessionMismatch   = (myActiveID ~= requesterActiveID)
                            and (myActiveID ~= nil or requesterActiveID ~= nil)
                            and myActiveID ~= nil
-    if requesterVersion >= gd.rosterVersion and requesterRaidItems >= myRaidItems
-       and not sessionMismatch then return end
+    local rosterSynced = (data and data.hash and ComputeRosterHash(gd.roster) == data.hash)
+                      or (requesterVersion >= gd.rosterVersion)
+    if rosterSynced and requesterRaidItems >= myRaidItems and not sessionMismatch then return end
     -- Random jitter 0.3-1.5 s so multiple officers don't reply simultaneously
     local delay = 0.3 + math.random() * 1.2
     self:ScheduleTimer(function()

@@ -629,21 +629,6 @@ function PiratesPlunder:OnGroupRosterUpdate()
     end
     self._wasInGroup = nowInGroup
 
-    if self:CanModify() and PP.Repo.Roster:HasActiveSession() and IsInRaid() then
-        if not self._knownRaidMembers then self._knownRaidMembers = {} end
-        local gk = self:GetActiveGuildKey()
-        local playerFull = self:GetPlayerFullName()
-        for i = 1, GetNumGroupMembers() do
-            local name, _, _, _, _, _, _, online = GetRaidRosterInfo(i)
-            if name and online then
-                local full = self:GetFullName(name)
-                if full ~= playerFull and not self._knownRaidMembers[full] then
-                    self._knownRaidMembers[full] = true
-                    self:ScheduleTimer(function() self:SendFullSync(full, gk) end, 2)
-                end
-            end
-        end
-    end
     if not nowInGroup then
         self._knownRaidMembers = nil
     end
