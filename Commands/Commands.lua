@@ -18,6 +18,7 @@ table.insert(PP._commandGroups, function(input)
         PP:Print("/pp session – Show or manage the active loot session")
         PP:Print("/pp roster – Add, remove, clear, or randomize roster entries")
         PP:Print("/pp status – Show officer detection info")
+        PP:Print("/pp debug – Toggle sync debug output")
         PP:Print("/pp minimap – Show or hide the minimap icon")
         return true
 

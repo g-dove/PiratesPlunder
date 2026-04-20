@@ -634,8 +634,8 @@ function PiratesPlunder:OnGroupRosterUpdate()
         local gk = self:GetActiveGuildKey()
         local playerFull = self:GetPlayerFullName()
         for i = 1, GetNumGroupMembers() do
-            local name = GetRaidRosterInfo(i)
-            if name then
+            local name, _, _, _, _, _, _, online = GetRaidRosterInfo(i)
+            if name and online then
                 local full = self:GetFullName(name)
                 if full ~= playerFull and not self._knownRaidMembers[full] then
                     self._knownRaidMembers[full] = true

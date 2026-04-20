@@ -288,9 +288,9 @@ function PP:_handleAck(data, sender)
                 end
             end
         end
-        if not e and PP._criticalAckSnapshots then
-            PP._criticalAckSnapshots[data.ackId] = nil
-        end
+    end
+    if not e and data.ackId and PP._criticalAckSnapshots then
+        PP._criticalAckSnapshots[data.ackId] = nil
     end
 end
 
@@ -430,6 +430,9 @@ function PP:RequestSync()
 end
 
 function PP:SendFullSync(target, guildKey)
+    if PP._debug then
+        self:Print("[Sync] Sending full sync to " .. self:GetShortName(target) .. (guildKey and (" [" .. guildKey .. "]") or " [all guilds]"))
+    end
     -- Send only the requested guild's data; sending all keys is wasteful and
     -- risks the receiver merging data for guilds it has no context for.
     local guilds = {}
@@ -689,7 +692,7 @@ function PP:HandleGroupScoreAck(data, sender)
         local label = match and "|cFF00FF00match \226\156\147|r" or "|cFFFF4400MISMATCH \226\156\151 \226\134\146 sending full sync|r"
         self:Print("[Sync] Hash ACK from " .. self:GetShortName(sender) .. ": " .. label)
     end
-    if not match then
+    if not match and data.guildKey then
         self:SendFullSync(sender, data.guildKey)
     end
 end
