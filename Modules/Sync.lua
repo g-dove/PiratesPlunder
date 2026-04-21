@@ -387,9 +387,14 @@ function PP:BroadcastSessionCreate(sessionID)
     local gk = self:GetActiveGuildKey()
     local gd = PP.Repo.Roster:GetData(gk)
     if not gd then return end
+    local s = gd.sessions[sessionID]
+    if not s then return end
     self:BroadcastCritical(PP.MSG.SESSION_CREATE, {
         raidID   = sessionID,
-        raid     = gd.sessions[sessionID],
+        raid     = {
+            name      = s.name,
+            startTime = s.startTime,
+        },
         guildKey = gk,
     })
 end
@@ -721,8 +726,18 @@ function PP:HandleSessionCreate(data, sender)
        and gd.sessions[existingID].active then
         PP.Session:End(PP.SESSION_END.SYNC_RECEIVED, existingID, gk)
     end
-    gd.sessions[data.raidID] = data.raid
-    gd.activeSessionID = data.raidID
+    gd.sessions[data.raidID] = {
+        name      = data.raid.name,
+        startTime = data.raid.startTime,
+        guildKey  = data.guildKey,
+        leader    = sender,
+        items     = {},
+        bosses    = {},
+        members   = {},
+        active    = true,
+        endTime   = nil,
+    }
+    PP.Repo.Roster:SetActiveSessionID(gk, data.raidID)
     -- When in a raid, always adopt the session's guild key — guards against the
     -- timing race where GetRaidLeaderGuild() returned nil in OnGroupRosterUpdate
     -- before unit data had populated.  Outside a raid, only set if unset.
