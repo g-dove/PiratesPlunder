@@ -159,15 +159,7 @@ function PP.Loot:Award(key, fullName, free)
         end
         roster[fullName].score = newScore
         PP.Repo.Roster:BumpRosterVersion()
-        -- Broadcast updated roster so all clients reflect the new score
-        local gk = PP:GetActiveGuildKey()
-        local gd = PP.Repo.Roster:GetData(gk)
-        if not gd then return end
-        PP:SendAddonMessage(PP.MSG.SCORE_UPDATE, {
-            roster   = gd.roster,
-            version  = gd.rosterVersion,
-            guildKey = gk,
-        })
+        PP:BroadcastRosterDelta({[fullName] = roster[fullName]}, nil)
     end
 
     -- Record in session history with cost info (key stored for LOOT_STATE_QUERY matching)

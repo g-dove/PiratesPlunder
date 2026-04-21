@@ -43,6 +43,9 @@ PiratesPlunder.MSG = {
     VERSION_REQUEST   = "VER_REQ",
     VERSION_REPLY     = "VER_REP",
     ACK               = "ACK",
+    ROSTER_DELTA      = "ROS_DEL",
+    GROUP_SCORE       = "GRP_SCR",
+    GROUP_SCORE_ACK   = "GRP_ACK",
 }
 
 -- Loot response types
@@ -621,10 +624,15 @@ function PiratesPlunder:OnGroupRosterUpdate()
     -- Auto-request sync when first joining a group
     if nowInGroup and not self._wasInGroup then
         self:ScheduleTimer(function()
+            self:SendAddonMessage(PP.MSG.VERSION_REQUEST, {})
             self:RequestSync()
         end, 3) -- delay lets the comms channel open and officers load in
     end
     self._wasInGroup = nowInGroup
+
+    if not nowInGroup then
+        PP._ppUsers = nil
+    end
 
     -- If a deferred session-end is pending and we are still in a group, cancel it
     if self.db.global.pendingSessionEnd and nowInGroup then

@@ -35,10 +35,10 @@ end
 
 function PP:ShowMinimapIcon()
     self.db.global.minimapIcon.hide = false
-    icon:Show("PiratesPlunder")
+    icon:Refresh("PiratesPlunder", self.db.global.minimapIcon)
 end
 
 function PP:HideMinimapIcon()
     self.db.global.minimapIcon.hide = true
-    icon:Hide("PiratesPlunder")
+    icon:Refresh("PiratesPlunder", self.db.global.minimapIcon)
 end

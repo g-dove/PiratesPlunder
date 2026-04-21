@@ -7,17 +7,36 @@ local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 ---------------------------------------------------------------------------
 -- Reliable broadcast state
 ---------------------------------------------------------------------------
-local RETRY_DELAY            = 4    -- seconds between whisper retry attempts
-local MAX_RETRIES            = 3    -- max whisper retries before giving up
-local PERIODIC_SYNC_INTERVAL = 90   -- seconds between version-check broadcasts
-local SYNC_INHIBIT_WINDOW    = 60   -- skip check if SYNC_FULL received within N seconds
+local RETRY_DELAY       = 4   -- seconds between whisper retry attempts
+local MAX_RETRIES       = 3   -- max whisper retries before giving up
+local FULL_SYNC_COOLDOWN = 10 -- seconds before another full sync can broadcast
 
-PP._retryQueue           = {}
-PP._seenAckIds           = {}
-PP._lastSyncFullReceived = 0
-PP._periodicSyncTicker   = nil
+PP._retryQueue  = {}
+PP._seenAckIds  = {}
 
--- ChatThrottleLib priority per message type. Omitted = "NORMAL".
+local _ackCounter = 0
+local function newAckId()
+    _ackCounter = _ackCounter + 1
+    return string.format("%x-%x-%x", time(), math.floor(GetTime() * 1000) % 0x10000, _ackCounter)
+end
+
+local function ComputeRosterHash(roster)
+    local keys = {}
+    for k in pairs(roster) do keys[#keys + 1] = k end
+    table.sort(keys)
+    local h = 0
+    for _, k in ipairs(keys) do
+        local score = roster[k] and roster[k].score or 0
+        for i = 1, #k do
+            h = (h * 31 + string.byte(k, i)) % 0x7FFFFFFF
+        end
+        h = (h * 31 + score) % 0x7FFFFFFF
+    end
+    return h
+end
+
+PP.ComputeRosterHash = ComputeRosterHash
+
 local MSG_PRIORITY = {
     [PP.MSG.LOOT_POST]        = "ALERT",
     [PP.MSG.LOOT_AWARD]       = "ALERT",
@@ -26,11 +45,14 @@ local MSG_PRIORITY = {
     [PP.MSG.SESSION_CREATE]   = "ALERT",
     [PP.MSG.SESSION_CLOSE]    = "ALERT",
     [PP.MSG.ACK]              = "ALERT",
-    [PP.MSG.SYNC_REQUEST]     = "BULK",
+    [PP.MSG.ROSTER_DELTA]     = "ALERT",
+    [PP.MSG.GROUP_SCORE]      = "ALERT",
+    [PP.MSG.GROUP_SCORE_ACK]  = "ALERT",
+    [PP.MSG.SYNC_REQUEST]     = "ALERT",
     [PP.MSG.LOOT_STATE_QUERY] = "BULK",
     [PP.MSG.RAID_SETTINGS]    = "BULK",
-    [PP.MSG.VERSION_REQUEST]  = "BULK",
-    [PP.MSG.VERSION_REPLY]    = "BULK",
+    [PP.MSG.VERSION_REQUEST]  = "ALERT",
+    [PP.MSG.VERSION_REPLY]    = "ALERT",
 }
 
 local function snapshotGroup(self)
@@ -62,8 +84,16 @@ end
 -- Send a structured message to the raid / party
 ---------------------------------------------------------------------------
 function PP:SendAddonMessage(msgType, data, target)
-    -- Never broadcast real messages while in sandbox mode
     if self._sandbox then return end
+    if type(data) == "table" and data._ackId then
+        if not PP._criticalAckSnapshots then PP._criticalAckSnapshots = {} end
+        if not PP._criticalAckSnapshots[data._ackId] then
+            local gk = data.guildKey or self:GetActiveGuildKey()
+            local gd = PP.Repo.Roster:GetData(gk)
+            local h  = gd and ComputeRosterHash(gd.roster) or nil
+            PP._criticalAckSnapshots[data._ackId] = { hash = h, guildKey = gk, rosterVersion = gd and gd.rosterVersion or nil }
+        end
+    end
     local payload = self:Serialize(msgType, data)
     local prio    = MSG_PRIORITY[msgType] or "NORMAL"
     if target then
@@ -88,15 +118,22 @@ function PP:OnCommReceived(prefix, message, distribution, sender)
     local me = self:GetPlayerFullName()
     sender = self:GetFullName(sender)
     if sender == me then return end
+    PP._ppUsers = PP._ppUsers or {}
+    PP._ppUsers[sender] = true
 
-    -- ACK any critical broadcast so the sender can cancel whisper retries
     if type(data) == "table" and data._ackId then
-        self:SendAddonMessage(PP.MSG.ACK, { ackId = data._ackId }, sender)
+        local gk = (type(data) == "table" and data.guildKey) or self:GetActiveGuildKey()
+        local gd = PP.Repo.Roster:GetData(gk)
+        self:SendAddonMessage(PP.MSG.ACK, {
+            ackId         = data._ackId,
+            hash          = gd and ComputeRosterHash(gd.roster) or nil,
+            guildKey      = gk,
+            rosterVersion = gd and gd.rosterVersion or nil,
+        }, sender)
     end
 
-    -- Dispatch
     if msgType == PP.MSG.ACK then
-        if data and data.ackId then self:_handleAck(data.ackId, sender) end
+        if data and data.ackId then self:_handleAck(data, sender) end
 
     elseif msgType == PP.MSG.SYNC_REQUEST then
         self:HandleSyncRequest(sender, data)
@@ -151,6 +188,15 @@ function PP:OnCommReceived(prefix, message, distribution, sender)
 
     elseif msgType == PP.MSG.VERSION_REPLY then
         self:HandleVersionReply(data, sender)
+
+    elseif msgType == PP.MSG.ROSTER_DELTA then
+        self:HandleRosterDelta(data, sender)
+
+    elseif msgType == PP.MSG.GROUP_SCORE then
+        self:HandleGroupScore(data, sender)
+
+    elseif msgType == PP.MSG.GROUP_SCORE_ACK then
+        self:HandleGroupScoreAck(data, sender)
     end
 end
 
@@ -183,7 +229,7 @@ end
 ---------------------------------------------------------------------------
 function PP:BroadcastCritical(msgType, data, maxRetries)
     if self._sandbox or not IsInGroup() then return end
-    local id = string.format("%x-%x-%x", time(), math.random(0xFFFF), math.random(0x7FFFFFFF))
+    local id = newAckId()
     data._ackId = id
     local entry = {
         msgType    = msgType,
@@ -213,46 +259,44 @@ function PP:_retryBroadcast(id)
 
     if not anyPending or e.retries >= e.maxRetries then
         PP._retryQueue[id] = nil
+        if PP._criticalAckSnapshots then PP._criticalAckSnapshots[id] = nil end
         return
     end
 
     e.retries = e.retries + 1
     for name, acked in pairs(e.expected) do
-        if not acked then
+        if not acked and PP._ppUsers and PP._ppUsers[name] then
             self:SendAddonMessage(e.msgType, e.data, name)
         end
     end
     e.timerId = self:ScheduleTimer(function() self:_retryBroadcast(id) end, RETRY_DELAY)
 end
 
-function PP:_handleAck(ackId, sender)
-    local e = PP._retryQueue[ackId]
-    if not e then return end
-    local full = self:GetFullName(sender)
-    if e.expected[full] == false then
-        e.expected[full] = true
+function PP:_handleAck(data, sender)
+    local e = PP._retryQueue[data.ackId]
+    if e then
+        local full = self:GetFullName(sender)
+        if e.expected[full] == false then
+            e.expected[full] = true
+        end
     end
-end
-
----------------------------------------------------------------------------
--- Periodic version check: reuses RequestSync() every 90s (out of combat)
--- so mid-raid score/state drift is caught without spamming full syncs.
--- Officers only respond if requester is verifiably behind (existing gate).
----------------------------------------------------------------------------
-function PP:StartPeriodicSync()
-    if PP._periodicSyncTicker then return end
-    PP._periodicSyncTicker = C_Timer.NewTicker(PERIODIC_SYNC_INTERVAL, function()
-        if UnitAffectingCombat("player") then return end
-        if not PP.Repo.Roster:HasActiveSession() then return end
-        if (GetTime() - PP._lastSyncFullReceived) < SYNC_INHIBIT_WINDOW then return end
-        PP:RequestSync()
-    end)
-end
-
-function PP:StopPeriodicSync()
-    if PP._periodicSyncTicker then
-        PP._periodicSyncTicker:Cancel()
-        PP._periodicSyncTicker = nil
+    if data.hash and data.ackId then
+        local snap = PP._criticalAckSnapshots and PP._criticalAckSnapshots[data.ackId]
+        if snap and snap.hash and snap.rosterVersion and data.rosterVersion then
+            if snap.rosterVersion == data.rosterVersion then
+                local match = snap.hash == data.hash
+                if PP._debug then
+                    local label = match and "|cFF00FF00match \226\156\147|r" or "|cFFFF4400MISMATCH \226\156\151|r"
+                    self:Print("[Sync] ACK hash from " .. self:GetShortName(sender) .. ": " .. label)
+                end
+                if not match then
+                    self:ScheduleTimer(function() self:SendFullSync(snap.guildKey) end, 0.5)
+                end
+            end
+        end
+    end
+    if not e and data.ackId and PP._criticalAckSnapshots then
+        PP._criticalAckSnapshots[data.ackId] = nil
     end
 end
 
@@ -261,6 +305,7 @@ function PP:WipeRetryQueue()
         if e.timerId then PP:CancelTimer(e.timerId) end
     end
     PP._retryQueue = {}
+    PP._criticalAckSnapshots = {}
 end
 
 function PP:HandleRaidSettings(data, sender)
@@ -286,9 +331,53 @@ function PP:BroadcastRoster()
     local gk = self:GetActiveGuildKey()
     local gd = PP.Repo.Roster:GetData(gk)
     if not gd then return end
+    if PP._debug then
+        self:Print("[Sync] Full roster broadcast sent (v" .. gd.rosterVersion .. ")")
+    end
     self:SendAddonMessage(PP.MSG.ROSTER_UPDATE, {
         roster   = gd.roster,
         version  = gd.rosterVersion,
+        guildKey = gk,
+        hash     = ComputeRosterHash(gd.roster),
+    })
+end
+
+function PP:BroadcastRosterDelta(changed, removed)
+    if not IsInGroup() then return end
+    local gk = self:GetActiveGuildKey()
+    local gd = PP.Repo.Roster:GetData(gk)
+    if not gd then return end
+    if PP._debug then
+        local nc = changed and (function() local n=0; for _ in pairs(changed) do n=n+1 end; return n end)() or 0
+        local nr = removed and #removed or 0
+        self:Print("[Sync] Delta broadcast sent (v" .. gd.rosterVersion .. "): " .. nc .. " changed, " .. nr .. " removed")
+    end
+    self:BroadcastCritical(PP.MSG.ROSTER_DELTA, {
+        changed  = changed,
+        removed  = removed,
+        version  = gd.rosterVersion,
+        hash     = ComputeRosterHash(gd.roster),
+        guildKey = gk,
+    })
+end
+
+function PP:BroadcastGroupScore(amount)
+    if not IsInGroup() then return end
+    local gk = self:GetActiveGuildKey()
+    local gd = PP.Repo.Roster:GetData(gk)
+    if not gd then return end
+    local ver = gd.rosterVersion
+    if not PP._groupScoreHashes then PP._groupScoreHashes = {} end
+    PP._groupScoreHashes[ver] = ComputeRosterHash(gd.roster)
+    for v in pairs(PP._groupScoreHashes) do
+        if v < ver - 10 then PP._groupScoreHashes[v] = nil end
+    end
+    if PP._debug then
+        self:Print("[Sync] Group score +" .. (amount or 1) .. " broadcast (v" .. ver .. ")")
+    end
+    self:SendAddonMessage(PP.MSG.GROUP_SCORE, {
+        amount   = amount or 1,
+        version  = ver,
         guildKey = gk,
     })
 end
@@ -298,7 +387,7 @@ function PP:BroadcastSessionCreate(sessionID)
     local gk = self:GetActiveGuildKey()
     local gd = PP.Repo.Roster:GetData(gk)
     if not gd then return end
-    self:SendAddonMessage(PP.MSG.SESSION_CREATE, {
+    self:BroadcastCritical(PP.MSG.SESSION_CREATE, {
         raidID   = sessionID,
         raid     = gd.sessions[sessionID],
         guildKey = gk,
@@ -307,7 +396,7 @@ end
 
 function PP:BroadcastSessionClose(sessionID)
     if not IsInGroup() then return end
-    self:SendAddonMessage(PP.MSG.SESSION_CLOSE, {
+    self:BroadcastCritical(PP.MSG.SESSION_CLOSE, {
         raidID   = sessionID,
         guildKey = self:GetActiveGuildKey(),
     })
@@ -315,10 +404,10 @@ end
 
 function PP:BroadcastSessionDelete(sessionID, guildKey, newVersion)
     if not IsInGroup() then return end
-    self:SendAddonMessage(PP.MSG.SESSION_DELETE, {
-        raidID      = sessionID,
-        guildKey    = guildKey,
-        version     = newVersion,
+    self:BroadcastCritical(PP.MSG.SESSION_DELETE, {
+        raidID   = sessionID,
+        guildKey = guildKey,
+        version  = newVersion,
     })
 end
 
@@ -326,8 +415,6 @@ function PP:RequestSync()
     if not IsInGroup() then return end
     local gk = self:GetActiveGuildKey()
     local gd = PP.Repo.Roster:GetData(gk)
-    -- If we have no local record at all, send floor values so any officer with
-    -- data for this guild key will see us as behind and respond with SYNC_FULL.
     local rosterVersion   = gd and gd.rosterVersion   or -1
     local activeSessionID = gd and gd.activeSessionID or nil
     local raidItemCount   = 0
@@ -336,17 +423,28 @@ function PP:RequestSync()
             raidItemCount = raidItemCount + #(session.items or {})
         end
     end
-    self:SendAddonMessage(PP.MSG.SYNC_REQUEST, {
+    local payload = {
         guildKey        = gk,
         rosterVersion   = rosterVersion,
         raidItemCount   = raidItemCount,
         activeSessionID = activeSessionID,
-    })
+        hash            = gd and ComputeRosterHash(gd.roster) or nil,
+    }
+    self:SendAddonMessage(PP.MSG.SYNC_REQUEST, payload)
 end
 
-function PP:SendFullSync(target, guildKey)
-    -- Send only the requested guild's data; sending all keys is wasteful and
-    -- risks the receiver merging data for guilds it has no context for.
+function PP:SendFullSync(guildKey)
+    local now = time()
+    if PP._lastFullSyncSent and (now - PP._lastFullSyncSent) < FULL_SYNC_COOLDOWN then
+        if PP._debug then
+            self:Print("[Sync] Full sync suppressed (cooldown)")
+        end
+        return
+    end
+    PP._lastFullSyncSent = now
+    if PP._debug then
+        self:Print("[Sync] Full sync broadcast" .. (guildKey and (" [" .. guildKey .. "]") or " [all guilds]"))
+    end
     local guilds = {}
     if guildKey then
         local gd = PP.Repo.Roster:GetData(guildKey)
@@ -361,7 +459,7 @@ function PP:SendFullSync(target, guildKey)
         raidSettings = {
             autoPassEpicRolls = self.db.global.autoPassEpicRolls,
         },
-    }, target)
+    })
 end
 
 ---------------------------------------------------------------------------
@@ -401,19 +499,23 @@ function PP:HandleSyncRequest(sender, data)
     local sessionMismatch   = (myActiveID ~= requesterActiveID)
                            and (myActiveID ~= nil or requesterActiveID ~= nil)
                            and myActiveID ~= nil
-    if requesterVersion >= gd.rosterVersion and requesterRaidItems >= myRaidItems
-       and not sessionMismatch then return end
+    local rosterSynced
+    if data and data.hash then
+        rosterSynced = (ComputeRosterHash(gd.roster) == data.hash)
+    else
+        rosterSynced = (requesterVersion >= gd.rosterVersion)
+    end
+    if rosterSynced and requesterRaidItems >= myRaidItems and not sessionMismatch then return end
     -- Random jitter 0.3-1.5 s so multiple officers don't reply simultaneously
     local delay = 0.3 + math.random() * 1.2
     self:ScheduleTimer(function()
-        self:SendFullSync(sender, gk)
+        self:SendFullSync(gk)
     end, delay)
 end
 
 -- Receive full sync data
 function PP:HandleSyncFull(data, sender)
     if not data or not data.guilds then return end
-    PP._lastSyncFullReceived = GetTime()
     -- Only accept data for guild keys we already know about or that match our
     -- own guild / active key.  This prevents foreign guild records from being
     -- auto-created in our database just because an officer has stale history.
@@ -472,22 +574,22 @@ function PP:HandleSyncFull(data, sender)
                     end
                 end
             end
-            if incoming.activeSessionID then
+            local incomingSessionVer = incoming.activeSessionVersion or 0
+            local localSessionVer    = local_gd.activeSessionVersion or 0
+            if incoming.activeSessionID and incomingSessionVer >= localSessionVer then
                 local incomingID = incoming.activeSessionID
-                -- End any conflicting locally-active session before adopting the synced one.
                 local existingID = local_gd.activeSessionID
                 if existingID and existingID ~= incomingID
                    and local_gd.sessions[existingID]
                    and local_gd.sessions[existingID].active then
                     PP.Session:End(PP.SESSION_END.SYNC_FULL, existingID, gk)
                 end
-                local_gd.activeSessionID = incomingID
-                -- Part 3: if we previously ended this session prematurely, restore it
+                local_gd.activeSessionID      = incomingID
+                local_gd.activeSessionVersion = incomingSessionVer
                 if local_gd.sessions[incomingID] and not local_gd.sessions[incomingID].active then
                     local_gd.sessions[incomingID].active  = true
                     local_gd.sessions[incomingID].endTime = nil
                 end
-                -- Cancel any deferred session end that referenced this session
                 if self.db.global.pendingSessionEnd
                     and self.db.global.pendingSessionEnd.sessionID == incomingID then
                     self.db.global.pendingSessionEnd = nil
@@ -496,10 +598,6 @@ function PP:HandleSyncFull(data, sender)
                         self._pendingSessionEndTimer = nil
                     end
                 end
-                -- A restored session may make us the active leader; re-run the
-                -- leader check so the "Continue?" prompt fires if we hold rank 2.
-                -- Gate on active guild key to avoid redundant calls if the sync
-                -- payload happens to contain multiple guild keys.
                 if IsInRaid() and gk == activeKey then
                     PP.Session:CheckLeaderPresent()
                 end
@@ -517,7 +615,6 @@ function PP:HandleSyncFull(data, sender)
     self:RefreshMainWindow()
 end
 
--- Roster update from an officer
 function PP:HandleRosterUpdate(data, sender)
     if not data or not data.guildKey then return end
     local gd = PP.Repo.Roster:GetData(data.guildKey)
@@ -525,7 +622,88 @@ function PP:HandleRosterUpdate(data, sender)
     if data.version and data.version > gd.rosterVersion then
         gd.roster        = data.roster or gd.roster
         gd.rosterVersion = data.version
+        if PP._debug then
+            local match = not data.hash or ComputeRosterHash(gd.roster) == data.hash
+            local label = match and "|cFF00FF00match \226\156\147|r" or "|cFFFF4400MISMATCH \226\156\151|r"
+            self:Print("[Sync] Full roster from " .. self:GetShortName(sender) .. " (v" .. data.version .. "): hash " .. label)
+        end
+        if data.hash and ComputeRosterHash(gd.roster) ~= data.hash then
+            self:ScheduleTimer(function() self:RequestSync() end, math.random())
+        end
         self:RefreshMainWindow()
+    end
+end
+
+function PP:HandleRosterDelta(data, sender)
+    if not data or not data.guildKey then return end
+    local gd = PP.Repo.Roster:GetData(data.guildKey)
+    if not gd then return end
+    if not (data.version and data.version > gd.rosterVersion) then return end
+    if data.changed then
+        for fullName, entry in pairs(data.changed) do
+            gd.roster[fullName] = entry
+        end
+    end
+    if data.removed then
+        for _, fullName in ipairs(data.removed) do
+            gd.roster[fullName] = nil
+        end
+    end
+    gd.rosterVersion = data.version
+    local match = not data.hash or ComputeRosterHash(gd.roster) == data.hash
+    if PP._debug then
+        local label = match and "|cFF00FF00match \226\156\147|r" or "|cFFFF4400MISMATCH \226\156\151|r"
+        self:Print("[Sync] Delta from " .. self:GetShortName(sender) .. " (v" .. data.version .. "): hash " .. label)
+    end
+    if not match then
+        self:ScheduleTimer(function() self:RequestSync() end, math.random())
+    end
+    self:RefreshMainWindow()
+end
+
+function PP:HandleGroupScore(data, sender)
+    if not data or not data.guildKey then return end
+    local gd = PP.Repo.Roster:GetData(data.guildKey)
+    if not gd then return end
+    if not (data.version and data.version > gd.rosterVersion) then return end
+    local amount = data.amount or 1
+    if IsInRaid() then
+        for i = 1, GetNumGroupMembers() do
+            local name = GetRaidRosterInfo(i)
+            if name then
+                local fullName = self:GetFullName(name)
+                if gd.roster[fullName] then
+                    gd.roster[fullName].score = gd.roster[fullName].score + amount
+                end
+            end
+        end
+    end
+    gd.rosterVersion = data.version
+    local hash = ComputeRosterHash(gd.roster)
+    if PP._debug then
+        local label = "|cFFFFD100pending ACK|r"
+        self:Print("[Sync] Group score from " .. self:GetShortName(sender) .. " (v" .. data.version .. "): " .. label)
+    end
+    self:SendAddonMessage(PP.MSG.GROUP_SCORE_ACK, {
+        version  = data.version,
+        hash     = hash,
+        guildKey = data.guildKey,
+    }, sender)
+    self:RefreshMainWindow()
+end
+
+function PP:HandleGroupScoreAck(data, sender)
+    if not data or not data.version or not data.hash then return end
+    if not PP._groupScoreHashes then return end
+    local expected = PP._groupScoreHashes[data.version]
+    if not expected then return end
+    local match = expected == data.hash
+    if PP._debug then
+        local label = match and "|cFF00FF00match \226\156\147|r" or "|cFFFF4400MISMATCH \226\156\151 \226\134\146 sending full sync|r"
+        self:Print("[Sync] Hash ACK from " .. self:GetShortName(sender) .. ": " .. label)
+    end
+    if not match and data.guildKey then
+        self:SendFullSync(data.guildKey)
     end
 end
 
@@ -558,7 +736,6 @@ function PP:HandleSessionCreate(data, sender)
     end
     self:Print("Session started: " .. (data.raid.name or data.raidID))
     PP._seenAckIds = {}
-    self:StartPeriodicSync()
     self:RefreshMainWindow()
 end
 

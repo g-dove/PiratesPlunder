@@ -33,11 +33,12 @@ function PP.Repo.Roster:EnsureData(guildKey)
     if not guildKey then return nil end
     if not PP.db.global.guilds[guildKey] then
         PP.db.global.guilds[guildKey] = {
-            roster          = {},
-            rosterVersion   = 0,
-            sessions        = {},
-            activeSessionID = nil,
-            deletedSessions = {},  -- [sessionID] = rosterVersion; tombstones
+            roster                = {},
+            rosterVersion         = 0,
+            sessions              = {},
+            activeSessionID       = nil,
+            activeSessionVersion  = 0,
+            deletedSessions       = {},
         }
     end
     return PP.db.global.guilds[guildKey]
@@ -100,7 +101,10 @@ end
 ---------------------------------------------------------------------------
 function PP.Repo.Roster:SetActiveSessionID(gk, id)
     local gd = self:GetData(gk)
-    if gd then gd.activeSessionID = id end
+    if gd then
+        gd.activeSessionID     = id
+        gd.activeSessionVersion = (gd.activeSessionVersion or 0) + 1
+    end
 end
 
 ---------------------------------------------------------------------------
@@ -108,7 +112,10 @@ end
 ---------------------------------------------------------------------------
 function PP.Repo.Roster:ClearActiveSessionID(gk)
     local gd = self:GetData(gk)
-    if gd then gd.activeSessionID = nil end
+    if gd then
+        gd.activeSessionID      = nil
+        gd.activeSessionVersion = (gd.activeSessionVersion or 0) + 1
+    end
 end
 
 ---------------------------------------------------------------------------

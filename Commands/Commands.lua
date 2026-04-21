@@ -18,6 +18,7 @@ table.insert(PP._commandGroups, function(input)
         PP:Print("/pp session – Show or manage the active loot session")
         PP:Print("/pp roster – Add, remove, clear, or randomize roster entries")
         PP:Print("/pp status – Show officer detection info")
+        PP:Print("/pp debug – Toggle sync debug output")
         PP:Print("/pp minimap – Show or hide the minimap icon")
         return true
 
@@ -65,6 +66,15 @@ table.insert(PP._commandGroups, function(input)
         PP:RefreshOfficerStatus()
         PP:Print("Officer rank threshold set to " .. n .. ". Status: " .. (PP._isOfficer and "|cFF00FF00Officer|r" or "|cFFFF4400Not officer|r"))
         PP:RefreshMainWindow()
+        return true
+
+    elseif input == "debug" then
+        PP._debug = not PP._debug
+        if PP._debug then
+            PP:Print("|cFFFFD100[Debug] Sync debug ON. Hash/delta events will print to chat.|r")
+        else
+            PP:Print("|cFF888888[Debug] Sync debug OFF.|r")
+        end
         return true
 
     elseif input == "minimap" then
