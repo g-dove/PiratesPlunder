@@ -95,7 +95,16 @@ function PP.Session:Create(raidName)
     local leader    = PP:GetPlayerFullName()
     local gk        = PP:GetActiveGuildKey()
     local gd        = PP.Repo.Roster:EnsureData(gk)
-    raidName        = raidName or ("Session " .. date("%Y-%m-%d %H:%M"))
+    if not raidName then
+        local today = date("%Y-%m-%d")
+        local count = 0
+        for _, s in pairs(gd.sessions or {}) do
+            if s.startTime and date("%Y-%m-%d", s.startTime) == today then
+                count = count + 1
+            end
+        end
+        raidName = "Session " .. today .. (count > 0 and (" #" .. (count + 1)) or "")
+    end
 
     gd.sessions[sessionID] = {
         name      = raidName,
