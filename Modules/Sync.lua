@@ -11,8 +11,9 @@ local RETRY_DELAY       = 4   -- seconds between whisper retry attempts
 local MAX_RETRIES       = 3   -- max whisper retries before giving up
 local FULL_SYNC_COOLDOWN = 10 -- seconds before another full sync can broadcast
 
-PP._retryQueue  = {}
-PP._seenAckIds  = {}
+PP._retryQueue       = {}
+PP._seenAckIds       = {}
+PP._completedLootKeys = {}
 
 local _ackCounter = 0
 local function newAckId()
@@ -49,6 +50,7 @@ local MSG_PRIORITY = {
     [PP.MSG.GROUP_SCORE]      = "ALERT",
     [PP.MSG.GROUP_SCORE_ACK]  = "ALERT",
     [PP.MSG.SYNC_REQUEST]     = "ALERT",
+    [PP.MSG.LOOT_CLEAR]       = "ALERT",
     [PP.MSG.LOOT_STATE_QUERY] = "BULK",
     [PP.MSG.RAID_SETTINGS]    = "BULK",
     [PP.MSG.VERSION_REQUEST]  = "ALERT",
@@ -197,6 +199,9 @@ function PP:OnCommReceived(prefix, message, distribution, sender)
 
     elseif msgType == PP.MSG.GROUP_SCORE_ACK then
         self:HandleGroupScoreAck(data, sender)
+
+    elseif msgType == PP.MSG.LOOT_CLEAR then
+        self:HandleLootClear(sender)
     end
 end
 
@@ -750,7 +755,8 @@ function PP:HandleSessionCreate(data, sender)
         self:ScheduleTimer(function() self:RequestSync() end, 1)
     end
     self:Print("Session started: " .. (data.raid.name or data.raidID))
-    PP._seenAckIds = {}
+    PP._seenAckIds        = {}
+    PP._completedLootKeys = {}
     self:RefreshMainWindow()
 end
 
@@ -816,6 +822,7 @@ end
 -- Loot posted for distribution
 function PP:HandleLootPost(data, sender)
     if not data or not data.key then return end
+    if PP._completedLootKeys[data.key] then return end
     if data._ackId then
         local key = sender .. ":" .. tostring(data._ackId)
         if PP._seenAckIds[key] then return end
@@ -885,6 +892,7 @@ function PP:HandleLootAward(data, sender)
         self.lootPopups[data.key]:Hide()
         self.lootPopups[data.key] = nil
     end
+    PP._completedLootKeys[data.key] = true
     PP.Repo.Loot:ClearEntry(data.key)
     self:RefreshLootMasterWindow()
     self:RefreshLootResponseFrame()
@@ -984,11 +992,24 @@ function PP:HandleLootCancel(data, sender)
         if PP._seenAckIds[key] then return end
         PP._seenAckIds[key] = true
     end
+    PP._completedLootKeys[data.key] = true
     PP.Repo.Loot:ClearEntry(data.key)
     if self.lootPopups[data.key] then
         self.lootPopups[data.key]:Hide()
         self.lootPopups[data.key] = nil
     end
+    self:RefreshLootMasterWindow()
+    self:RefreshLootResponseFrame()
+end
+
+-- Raid leader signalled that all loot is distributed: wipe local pending state
+function PP:HandleLootClear(sender)
+    if next(PP.Repo.Loot:GetAll()) == nil then return end
+    for key in pairs(PP.Repo.Loot:GetAll()) do
+        PP._completedLootKeys[key] = true
+    end
+    PP.Repo.Loot:WipeAll()
+    self:CloseLootPopups()
     self:RefreshLootMasterWindow()
     self:RefreshLootResponseFrame()
 end

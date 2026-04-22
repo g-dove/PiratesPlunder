@@ -46,6 +46,7 @@ PiratesPlunder.MSG = {
     ROSTER_DELTA      = "ROS_DEL",
     GROUP_SCORE       = "GRP_SCR",
     GROUP_SCORE_ACK   = "GRP_ACK",
+    LOOT_CLEAR        = "LOT_CLR",
 }
 
 -- Loot response types

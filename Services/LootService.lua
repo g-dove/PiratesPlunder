@@ -118,6 +118,7 @@ function PP.Loot:Cancel(key)
     PP.Repo.Loot:ClearEntry(key)
 
     PP:BroadcastCritical(PP.MSG.LOOT_CANCEL, { key = key })
+    PP.Loot:_AnnounceIfLootClear()
     PP:RefreshLootMasterWindow()
     PP:RefreshLootResponseFrame()
 end
@@ -197,10 +198,23 @@ function PP.Loot:Award(key, fullName, free)
     -- Remove from pending loot
     PP.Repo.Loot:ClearEntry(key)
 
+    PP.Loot:_AnnounceIfLootClear()
     PP:Print(entry.itemLink .. " awarded to " .. shortName)
     PP:RefreshLootMasterWindow()
     PP:RefreshMainWindow()
     PP:RefreshLootResponseFrame()
+end
+
+---------------------------------------------------------------------------
+-- _AnnounceIfLootClear()
+-- Called after Award/Cancel. If the raid leader just cleared the last item,
+-- announces loot completion to the group channel.
+---------------------------------------------------------------------------
+function PP.Loot:_AnnounceIfLootClear()
+    if not PP:IsRaidLeader() then return end
+    if not IsInGroup() then return end
+    if next(PP.Repo.Loot:GetAll()) ~= nil then return end
+    PP:BroadcastCritical(PP.MSG.LOOT_CLEAR, {})
 end
 
 ---------------------------------------------------------------------------
