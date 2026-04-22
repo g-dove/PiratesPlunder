@@ -267,6 +267,14 @@ function PPLootService:PostAll() end
 ---@field _commandGroups function[]
 ---@field _sandbox      boolean
 ---@field _sandboxMod   boolean
+---@field _debug        boolean
+---@field _ppUsers      table<string, boolean>|nil
+---@field _retryQueue   table<string, table>
+---@field _seenAckIds   table<string, boolean>
+---@field _criticalAckSnapshots table<string, table>|nil
+---@field _groupScoreHashes     table<string, number>|nil
+---@field _lastFullSyncSent     number|nil
+---@field _lootStateVerifyPending boolean|nil
 ---@field _currentTradePartner string|nil
 ---@field _currentTradeSlotted table|nil
 local PPAddon = {}
@@ -485,6 +493,14 @@ function PPAddon:BroadcastRaidSettings() end
 function PPAddon:HandleRaidSettings(data, sender) end
 
 function PPAddon:BroadcastRoster() end
+
+---@param msgType    string  PP.MSG.*
+---@param data       table
+---@param maxRetries? number  defaults to 3
+function PPAddon:BroadcastCritical(msgType, data, maxRetries) end
+
+function PPAddon:WipeRetryQueue() end
+
 function PPAddon:BroadcastRosterDelta(changed, removed) end
 function PPAddon:HandleRosterDelta(data, sender) end
 function PPAddon:BroadcastGroupScore(amount) end

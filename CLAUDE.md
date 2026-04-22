@@ -72,16 +72,14 @@ Thin wrappers; most logic has moved to Services.
 - **Raid.lua** — `GetRaidHistory()` only (reads via `PP.Repo.Roster:GetSessions`)
 - **Loot.lua** — loot utilities retained here: `GetEquippedComparisonData`, `ReceiveLootInterest`, `GetMinorUpgradeScore`, `GetSortedResponses`, `CastVote`, `ReceiveVote`, `GetPendingLootList`, `AddToLootQueue`, `RemoveFromLootQueue`, `SetLootTransmog`
 - **AwardedLoot.lua** — query per-player loot history (unchanged)
-- **Sync.lua** — all inter-client communication via AceComm-3.0 over the `"PPLNDR"` prefix. Handles 15+ message types. Session teardown paths call `PP.Session:End(reason, id, gk)`.
+- **Sync.lua** — all inter-client communication via AceComm-3.0 over the `"PPLNDR"` prefix. Handles 15+ message types. Session teardown paths call `PP.Session:End(reason, id, gk)`. Critical messages (loot events, session create/close/delete, roster delta, group score) use `BroadcastCritical` which attaches an `_ackId` and retries via whisper to members who don't ACK within 4 seconds (max 3 retries). `SendFullSync` always broadcasts to the group (no `target` parameter). Full syncs are throttled to one per 10 seconds.
 - **Trade.lua** — hooks the trade window to auto-populate pending deliveries (unchanged; accesses `PP.pendingTrades` directly since it predates the repo layer)
 
 ### Commands (`Commands/`)
 
 Slash dispatch uses a registration table. Each file inserts a handler function into `PP._commandGroups`. `main.lua:SlashCommand()` iterates them and stops at the first truthy return.
 
-- **DevCommands.lua** — `help`, `loot`/`l`, `response`/`r`, `version`/`v`, `sandbox`/`s`, `sandbox mod`/`s m`, `setrank N`, `bagdebug`, `status`
-- **SessionCommands.lua** — `session`, `session new [name]`, `session end`
-- **RosterCommands.lua** — `roster add <name>`, `roster remove <name>`, `roster clear`, `roster randomize`
+- **Commands.lua** — all slash handlers in one file: `help`, `loot`/`l`, `response`/`r`, `version`/`v`, `sandbox`/`s`, `sandbox mod`/`s m`, `setrank N`, `debug`, `minimap`, `status`, `session`, `session new [name]`, `session end`, `roster add <name>`, `roster remove <name>`, `roster clear`, `roster randomize`
 
 ### UI (`UI/`)
 
@@ -110,6 +108,8 @@ Access these through `PP.Repo.Loot:*` except in `Trade.lua` and `ResetAddon()`.
 
 `Sync.lua` is the communication backbone. All messages use AceComm-3.0 (`RegisterComm("PPLNDR")`). Data is serialized with AceSerializer-3.0. Messages are broadcast to RAID/PARTY or whispered for point-to-point sync. The wire protocol (`PP.MSG` constants and payload shapes) must not change — it affects cross-version interop.
 
+Message types include `ACK`, `ROSTER_DELTA`, `GROUP_SCORE`, `GROUP_SCORE_ACK` in addition to the original set. Messages are sent at `ALERT` (loot, session, sync, ACK) or `BULK` (loot state query, raid settings) AceComm priority. `PP._ppUsers` tracks which group members have the addon loaded (populated on any incoming message, cleared on group leave).
+
 ### Officer Detection
 
 `main.lua:IsOfficer()` uses a multi-API fallback chain: `C_GuildInfo.IsGuildOfficer()` → `CanUseGuildOfficerChat()` → `GuildControlGetRankFlags()` → rank index threshold (configurable via `/pp setrank N`).
@@ -129,7 +129,8 @@ Access these through `PP.Repo.Loot:*` except in `Trade.lua` and `ResetAddon()`.
 | `/pp session end` | End the active session |
 | `/pp roster add/remove/clear/randomize` | Roster management |
 | `/pp status` | Officer detection diagnostics |
-| `/pp bagdebug` | Diagnose alt+right-click bag hook |
+| `/pp debug` | Toggle sync debug output to chat |
+| `/pp minimap` | Toggle minimap icon visibility |
 | `/pp setrank N` | Set officer rank threshold |
 
 ## Loot Response Types

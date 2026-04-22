@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.5.0] - 2026-04-22
+### Added
+- Reliable broadcast (`BroadcastCritical`): initial RAID/PARTY broadcast + per-member whisper retry for critical messages (LOOT_POST, LOOT_AWARD, LOOT_CANCEL, SESSION_CREATE, SESSION_CLOSE, SESSION_DELETE, ROSTER_DELTA, GROUP_SCORE). Retries 3× with 4s delay before giving up.
+- ACK message type: receivers echo back a roster hash so the sender can detect divergence and trigger a delta or full sync.
+- Roster delta sync (`ROSTER_DELTA` / `BroadcastRosterDelta`): sends only changed/removed entries instead of the full roster on every update.
+- Group score sync (`GROUP_SCORE` / `GROUP_SCORE_ACK`): dedicated round-trip for boss-kill point awards with per-member acknowledgement.
+- Message priority system: LOOT, SESSION, and SYNC messages sent at ALERT priority; bulk sync at BULK priority.
+- Handshake on group join: automatically requests a version check from all online members.
+- Full sync throttle: additional full syncs are suppressed within a 10-second cooldown.
+- `ComputeRosterHash`: deterministic roster hash used to detect drift without exchanging the full payload.
+- `/pp debug` command: toggles sync debug output to chat (replaces `/pp bagdebug`).
+- `/pp minimap` command: toggles minimap icon visibility.
+- Minimap visibility checkbox in the Settings tab.
+- `ShowMinimapIcon()` / `HideMinimapIcon()` methods with persistence across reloads.
+- Default session names auto-increment within a day (`Session YYYY-MM-DD`, `Session YYYY-MM-DD #2`, …).
+- `_ppUsers` runtime table: tracks which group members have the addon loaded.
+
+### Changed
+- All slash-command handlers consolidated into `Commands/Commands.lua` (was split across `DevCommands.lua`, `RosterCommands.lua`, `SessionCommands.lua`).
+- `SendFullSync` no longer accepts a `target` parameter — full syncs always broadcast to the group.
+- Loot key format changed to `itemLink:timestamp:index` for stable chronological sort across reloads.
+- Loot master window width increased to 850.
+- Tooltip overlay frames reused instead of recreated on each draw.
+
+### Fixed
+- Loot master window sort order: entries now sort chronologically by timestamp, with index as tiebreaker within the same second.
+- Whisper reflection attack vector: the addon no longer echoes whisper-delivered messages back to the sender.
+- Potential duplicate ACK keys replaced with a time-based GUID.
+
 ## [0.4.0] - 2026-03-22
 ### Added
 - Minimap icon with LibDBIcon-1.0: left-click toggles main window, right-click opens loot master window
