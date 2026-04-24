@@ -69,7 +69,11 @@ function PP:SendAddonMessage(msgType, data, target)
             local gk = data.guildKey or self:GetActiveGuildKey()
             local gd = PP.Repo.Roster:GetData(gk)
             local h  = gd and ComputeRosterHash(gd.roster) or nil
-            PP._criticalAckSnapshots[data._ackId] = { hash = h, guildKey = gk, rosterVersion = gd and gd.rosterVersion or nil }
+            local id = data._ackId
+            PP._criticalAckSnapshots[id] = { hash = h, guildKey = gk, rosterVersion = gd and gd.rosterVersion or nil, syncTriggered = false }
+            PP:ScheduleTimer(function()
+                if PP._criticalAckSnapshots then PP._criticalAckSnapshots[id] = nil end
+            end, 30)
         end
     end
     local payload = self:Serialize(msgType, data)
@@ -218,20 +222,21 @@ function PP:BroadcastCritical(msgType, data)
 end
 
 function PP:_handleAck(data, sender)
-    if not (data.hash and data.ackId) then return end
+    if not data.ackId then return end
     local snap = PP._criticalAckSnapshots and PP._criticalAckSnapshots[data.ackId]
     if not snap then return end
-    PP._criticalAckSnapshots[data.ackId] = nil
-    if snap.hash and snap.rosterVersion and data.rosterVersion then
-        if snap.rosterVersion == data.rosterVersion then
-            local match = snap.hash == data.hash
-            if PP._debug then
-                local label = match and "|cFF00FF00match \226\156\147|r" or "|cFFFF4400MISMATCH \226\156\151|r"
-                self:Print("[Sync] ACK hash from " .. self:GetShortName(sender) .. ": " .. label)
-            end
-            if not match then
-                self:ScheduleTimer(function() self:SendFullSync(snap.guildKey) end, 0.5)
-            end
+    -- Snapshot cleanup is timer-driven (30s); don't nil it here so all members' hashes are checked.
+    if snap.syncTriggered then return end
+    if not (data.hash and snap.hash and snap.rosterVersion and data.rosterVersion) then return end
+    if snap.rosterVersion == data.rosterVersion then
+        local match = snap.hash == data.hash
+        if PP._debug then
+            local label = match and "|cFF00FF00match \226\156\147|r" or "|cFFFF4400MISMATCH \226\156\151|r"
+            self:Print("[Sync] ACK hash from " .. self:GetShortName(sender) .. ": " .. label)
+        end
+        if not match then
+            snap.syncTriggered = true
+            self:ScheduleTimer(function() self:SendFullSync(snap.guildKey) end, 0.5)
         end
     end
 end
