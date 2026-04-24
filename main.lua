@@ -38,6 +38,7 @@ PiratesPlunder.MSG = {
     RAID_SETTINGS     = "RAD_SET",
     SESSION_DELETE    = "SES_DEL",
     LOOT_VOTE         = "LOT_VOT",
+    LOOT_CLEAR        = "LOT_CLR",
     LOOT_STATE_QUERY  = "LOT_SQR",
     LOOT_STATE_REPLY  = "LOT_SRP",
     VERSION_REQUEST   = "VER_REQ",
@@ -46,7 +47,6 @@ PiratesPlunder.MSG = {
     ROSTER_DELTA      = "ROS_DEL",
     GROUP_SCORE       = "GRP_SCR",
     GROUP_SCORE_ACK   = "GRP_ACK",
-    LOOT_CLEAR        = "LOT_CLR",
 }
 
 -- Loot response types

@@ -7,11 +7,8 @@ local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 ---------------------------------------------------------------------------
 -- Reliable broadcast state
 ---------------------------------------------------------------------------
-local RETRY_DELAY       = 4   -- seconds between whisper retry attempts
-local MAX_RETRIES       = 3   -- max whisper retries before giving up
 local FULL_SYNC_COOLDOWN = 10 -- seconds before another full sync can broadcast
 
-PP._retryQueue       = {}
 PP._seenAckIds       = {}
 PP._completedLootKeys = {}
 
@@ -39,48 +36,27 @@ end
 PP.ComputeRosterHash = ComputeRosterHash
 
 local MSG_PRIORITY = {
-    [PP.MSG.LOOT_POST]        = "ALERT",
-    [PP.MSG.LOOT_AWARD]       = "ALERT",
-    [PP.MSG.LOOT_CANCEL]      = "ALERT",
-    [PP.MSG.LOOT_INTEREST]    = "ALERT",
-    [PP.MSG.SESSION_CREATE]   = "ALERT",
-    [PP.MSG.SESSION_CLOSE]    = "ALERT",
-    [PP.MSG.ACK]              = "ALERT",
-    [PP.MSG.ROSTER_DELTA]     = "ALERT",
-    [PP.MSG.GROUP_SCORE]      = "ALERT",
-    [PP.MSG.GROUP_SCORE_ACK]  = "ALERT",
-    [PP.MSG.SYNC_REQUEST]     = "ALERT",
-    [PP.MSG.LOOT_CLEAR]       = "ALERT",
+    -- Loot lifecycle: players respond to posts, awards update scores
+    [PP.MSG.LOOT_POST]        = "NORMAL",
+    [PP.MSG.LOOT_INTEREST]    = "NORMAL",
+    [PP.MSG.LOOT_AWARD]       = "NORMAL",
+    [PP.MSG.LOOT_CANCEL]      = "NORMAL",
+    [PP.MSG.LOOT_CLEAR]       = "NORMAL",
+    -- Session lifecycle
+    [PP.MSG.SESSION_CREATE]   = "NORMAL",
+    [PP.MSG.SESSION_CLOSE]    = "NORMAL",
+    -- Sync / informational
+    [PP.MSG.ACK]              = "NORMAL",
+    [PP.MSG.ROSTER_DELTA]     = "NORMAL",
+    [PP.MSG.GROUP_SCORE]      = "NORMAL",
+    [PP.MSG.GROUP_SCORE_ACK]  = "NORMAL",
+    [PP.MSG.SYNC_REQUEST]     = "NORMAL",
+    [PP.MSG.VERSION_REQUEST]  = "NORMAL",
+    [PP.MSG.VERSION_REPLY]    = "NORMAL",
+    -- Large payloads / background recovery
     [PP.MSG.LOOT_STATE_QUERY] = "BULK",
     [PP.MSG.RAID_SETTINGS]    = "BULK",
-    [PP.MSG.VERSION_REQUEST]  = "ALERT",
-    [PP.MSG.VERSION_REPLY]    = "ALERT",
 }
-
-local function snapshotGroup(self)
-    local members, me = {}, self:GetPlayerFullName()
-    if IsInRaid() then
-        for i = 1, GetNumGroupMembers() do
-            local name, _, _, _, _, _, _, online = GetRaidRosterInfo(i)
-            if name and online then
-                local full = self:GetFullName(name)
-                if full ~= me then members[full] = false end
-            end
-        end
-    else
-        for i = 1, 4 do
-            local unit = "party" .. i
-            if UnitExists(unit) and UnitIsConnected(unit) then
-                local name, realm = UnitName(unit)
-                if name then
-                    local full = self:GetFullName(name .. (realm and realm ~= "" and ("-" .. realm) or ""))
-                    if full ~= me then members[full] = false end
-                end
-            end
-        end
-    end
-    return members
-end
 
 ---------------------------------------------------------------------------
 -- Send a structured message to the raid / party
@@ -228,89 +204,51 @@ function PP:BroadcastRaidSettings()
 end
 
 ---------------------------------------------------------------------------
--- Reliable broadcast: initial RAID/PARTY broadcast + whisper retry for
--- members who don't ACK. Used for ephemeral loot events that have no
--- recovery path if dropped (LOOT_POST, LOOT_AWARD, LOOT_CANCEL).
+-- Reliable broadcast: broadcast to the group and attach an ackId so
+-- recipients send back their roster hash. Any hash mismatch triggers a full
+-- sync — no per-member whisper retries (WoW's RAID/PARTY channel is
+-- reliable for online members; offline/loading clients recover via
+-- RequestSync on reconnect).
 ---------------------------------------------------------------------------
-function PP:BroadcastCritical(msgType, data, maxRetries)
+function PP:BroadcastCritical(msgType, data)
     if self._sandbox or not IsInGroup() then return end
     local id = newAckId()
     data._ackId = id
-    local entry = {
-        msgType    = msgType,
-        data       = data,
-        expected   = snapshotGroup(self),
-        retries    = 0,
-        maxRetries = maxRetries or MAX_RETRIES,
-    }
-    PP._retryQueue[id] = entry
     self:SendAddonMessage(msgType, data)
-    entry.timerId = self:ScheduleTimer(function() self:_retryBroadcast(id) end, RETRY_DELAY)
-end
-
-function PP:_retryBroadcast(id)
-    local e = PP._retryQueue[id]
-    if not e then return end
-
-    local current = snapshotGroup(self)
-    for name in pairs(e.expected) do
-        if current[name] == nil then e.expected[name] = nil end
-    end
-
-    local anyPending = false
-    for _, acked in pairs(e.expected) do
-        if not acked then anyPending = true; break end
-    end
-
-    if not anyPending or e.retries >= e.maxRetries then
-        PP._retryQueue[id] = nil
-        if PP._criticalAckSnapshots then PP._criticalAckSnapshots[id] = nil end
-        return
-    end
-
-    e.retries = e.retries + 1
-    for name, acked in pairs(e.expected) do
-        if not acked and PP._ppUsers and PP._ppUsers[name] then
-            self:SendAddonMessage(e.msgType, e.data, name)
-        end
-    end
-    e.timerId = self:ScheduleTimer(function() self:_retryBroadcast(id) end, RETRY_DELAY)
 end
 
 function PP:_handleAck(data, sender)
-    local e = PP._retryQueue[data.ackId]
-    if e then
-        local full = self:GetFullName(sender)
-        if e.expected[full] == false then
-            e.expected[full] = true
-        end
-    end
-    if data.hash and data.ackId then
-        local snap = PP._criticalAckSnapshots and PP._criticalAckSnapshots[data.ackId]
-        if snap and snap.hash and snap.rosterVersion and data.rosterVersion then
-            if snap.rosterVersion == data.rosterVersion then
-                local match = snap.hash == data.hash
-                if PP._debug then
-                    local label = match and "|cFF00FF00match \226\156\147|r" or "|cFFFF4400MISMATCH \226\156\151|r"
-                    self:Print("[Sync] ACK hash from " .. self:GetShortName(sender) .. ": " .. label)
-                end
-                if not match then
-                    self:ScheduleTimer(function() self:SendFullSync(snap.guildKey) end, 0.5)
-                end
+    if not (data.hash and data.ackId) then return end
+    local snap = PP._criticalAckSnapshots and PP._criticalAckSnapshots[data.ackId]
+    if not snap then return end
+    PP._criticalAckSnapshots[data.ackId] = nil
+    if snap.hash and snap.rosterVersion and data.rosterVersion then
+        if snap.rosterVersion == data.rosterVersion then
+            local match = snap.hash == data.hash
+            if PP._debug then
+                local label = match and "|cFF00FF00match \226\156\147|r" or "|cFFFF4400MISMATCH \226\156\151|r"
+                self:Print("[Sync] ACK hash from " .. self:GetShortName(sender) .. ": " .. label)
+            end
+            if not match then
+                self:ScheduleTimer(function() self:SendFullSync(snap.guildKey) end, 0.5)
             end
         end
-    end
-    if not e and data.ackId and PP._criticalAckSnapshots then
-        PP._criticalAckSnapshots[data.ackId] = nil
     end
 end
 
 function PP:WipeRetryQueue()
-    for _, e in pairs(PP._retryQueue) do
-        if e.timerId then PP:CancelTimer(e.timerId) end
-    end
-    PP._retryQueue = {}
     PP._criticalAckSnapshots = {}
+    if PP._lootIdleTimer then
+        PP:CancelTimer(PP._lootIdleTimer)
+        PP._lootIdleTimer = nil
+    end
+end
+
+-- Received from raid leader after 60s of no pending loot — clears any items
+-- stuck on the response frame that were missed during distribution.
+function PP:HandleLootClear(sender)
+    if next(PP.Repo.Loot:GetAll()) == nil then return end
+    PP:LocalClearLoot()
 end
 
 function PP:HandleRaidSettings(data, sender)
@@ -357,7 +295,7 @@ function PP:BroadcastRosterDelta(changed, removed)
         local nr = removed and #removed or 0
         self:Print("[Sync] Delta broadcast sent (v" .. gd.rosterVersion .. "): " .. nc .. " changed, " .. nr .. " removed")
     end
-    self:BroadcastCritical(PP.MSG.ROSTER_DELTA, {
+    self:SendAddonMessage(PP.MSG.ROSTER_DELTA, {
         changed  = changed,
         removed  = removed,
         version  = gd.rosterVersion,
@@ -648,7 +586,13 @@ function PP:HandleRosterDelta(data, sender)
     if not data or not data.guildKey then return end
     local gd = PP.Repo.Roster:GetData(data.guildKey)
     if not gd then return end
-    if not (data.version and data.version > gd.rosterVersion) then return end
+    if not data.version then return end
+    if data.version <= gd.rosterVersion then return end
+    -- Require sequential application; a gap means we missed a delta — fall back to full sync
+    if data.version ~= gd.rosterVersion + 1 then
+        self:ScheduleTimer(function() self:RequestSync() end, math.random())
+        return
+    end
     if data.changed then
         for fullName, entry in pairs(data.changed) do
             gd.roster[fullName] = entry
@@ -868,17 +812,30 @@ function PP:HandleLootAward(data, sender)
     end
     -- Apply score deduction to the winner
     if data.awardedTo then
-        local roster = PP.Repo.Roster:GetRoster()
+        local roster = PP.Repo.Roster:GetRoster(data.guildKey)
         if roster[data.awardedTo] then
             if data.newScore ~= nil then
                 roster[data.awardedTo].score = data.newScore
             elseif data.response == PP.RESPONSE.TRANSMOG then
                 roster[data.awardedTo].score = math.max(0, (roster[data.awardedTo].score or 0) - 1)
             elseif data.response == PP.RESPONSE.MINOR then
-                -- Recompute minor-upgrade target from local roster view
                 roster[data.awardedTo].score = PP:GetMinorUpgradeScore(data.awardedTo)
             else
                 roster[data.awardedTo].score = 0
+            end
+        end
+    end
+    -- Advance local rosterVersion to match the loot master and verify hash.
+    -- No separate ROSTER_DELTA is sent for awards — the version and hash travel
+    -- in the LOOT_AWARD payload so receivers stay in sync with one message.
+    if data.rosterVersion and data.guildKey then
+        local gd = PP.Repo.Roster:GetData(data.guildKey)
+        if gd then
+            if data.rosterVersion > gd.rosterVersion then
+                gd.rosterVersion = data.rosterVersion
+            end
+            if data.rosterHash and ComputeRosterHash(gd.roster) ~= data.rosterHash then
+                self:ScheduleTimer(function() self:RequestSync() end, math.random())
             end
         end
     end
@@ -1002,14 +959,3 @@ function PP:HandleLootCancel(data, sender)
     self:RefreshLootResponseFrame()
 end
 
--- Raid leader signalled that all loot is distributed: wipe local pending state
-function PP:HandleLootClear(sender)
-    if next(PP.Repo.Loot:GetAll()) == nil then return end
-    for key in pairs(PP.Repo.Loot:GetAll()) do
-        PP._completedLootKeys[key] = true
-    end
-    PP.Repo.Loot:WipeAll()
-    self:CloseLootPopups()
-    self:RefreshLootMasterWindow()
-    self:RefreshLootResponseFrame()
-end

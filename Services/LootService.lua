@@ -7,6 +7,47 @@ local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 
 PP.Loot = PP.Loot or {}
 
+local LOOT_IDLE_CLEAR_DELAY = 60  -- seconds of no pending loot before broadcasting a clear
+
+---------------------------------------------------------------------------
+-- _ScheduleIdleClear() / _CancelIdleClear()
+-- After the last item is cleared, raid leader schedules a broadcast telling
+-- all clients to wipe their loot display. Cancelled if a new item is posted
+-- before the timer fires (no race with new posts). Also cancelled on
+-- session end/create via WipeRetryQueue.
+---------------------------------------------------------------------------
+function PP.Loot:_ScheduleIdleClear()
+    self:_CancelIdleClear()
+    if not PP:IsRaidLeader() or not IsInGroup() then return end
+    PP._lootIdleTimer = PP:ScheduleTimer(function()
+        PP._lootIdleTimer = nil
+        if not PP:IsRaidLeader() or not IsInGroup() then return end
+        if next(PP.Repo.Loot:GetAll()) ~= nil then return end
+        PP:SendAddonMessage(PP.MSG.LOOT_CLEAR, {})
+        if PP._debug then
+            PP:Print("[Sync] Loot idle clear broadcast (" .. LOOT_IDLE_CLEAR_DELAY .. "s with no pending loot)")
+        end
+    end, LOOT_IDLE_CLEAR_DELAY)
+end
+
+function PP.Loot:_CancelIdleClear()
+    if PP._lootIdleTimer then
+        PP:CancelTimer(PP._lootIdleTimer)
+        PP._lootIdleTimer = nil
+    end
+end
+
+---------------------------------------------------------------------------
+-- LocalClearLoot() – wipe pending loot from this client's display only.
+-- No broadcast. Used by the slash command and the Settings button.
+---------------------------------------------------------------------------
+function PP:LocalClearLoot()
+    PP.Repo.Loot:WipeAll()
+    self:CloseLootPopups()
+    self:RefreshLootMasterWindow()
+    self:RefreshLootResponseFrame()
+end
+
 ---------------------------------------------------------------------------
 -- Restore() – public entry point for post-load loot recovery.
 -- Called from OnPlayerEnteringWorld for both reload and zone-transition
@@ -79,6 +120,7 @@ function PP.Loot:Post(itemLink)
         return
     end
 
+    PP.Loot:_CancelIdleClear()
     local key = PP:LootKey(itemLink)
     PP.Repo.Loot:SetEntry(key, {
         itemLink      = itemLink,
@@ -118,7 +160,9 @@ function PP.Loot:Cancel(key)
     PP.Repo.Loot:ClearEntry(key)
 
     PP:BroadcastCritical(PP.MSG.LOOT_CANCEL, { key = key })
-    PP.Loot:_AnnounceIfLootClear()
+    if next(PP.Repo.Loot:GetAll()) == nil then
+        PP.Loot:_ScheduleIdleClear()
+    end
     PP:RefreshLootMasterWindow()
     PP:RefreshLootResponseFrame()
 end
@@ -160,7 +204,6 @@ function PP.Loot:Award(key, fullName, free)
         end
         roster[fullName].score = newScore
         PP.Repo.Roster:BumpRosterVersion()
-        PP:BroadcastRosterDelta({[fullName] = roster[fullName]}, nil)
     end
 
     -- Record in session history with cost info (key stored for LOOT_STATE_QUERY matching)
@@ -184,37 +227,34 @@ function PP.Loot:Award(key, fullName, free)
         IsInRaid() and "RAID" or "PARTY"
     )
 
-    -- Broadcast award (include score data so all clients apply correct deduction)
+    -- Single broadcast carries score change + roster version/hash so receivers
+    -- can update scores and verify sync without a separate ROSTER_DELTA message.
+    local gk         = PP:GetActiveGuildKey()
+    local rosterVer  = PP.Repo.Roster:GetRosterVersion(gk)
+    local rosterHash = PP.ComputeRosterHash and PP.ComputeRosterHash(PP.Repo.Roster:GetRoster(gk)) or nil
     PP:BroadcastCritical(PP.MSG.LOOT_AWARD, {
-        key         = key,
-        itemLink    = entry.itemLink,
-        itemID      = entry.itemID,
-        awardedTo   = fullName,
-        response    = winnerResponse,
-        pointsSpent = pointsSpent,
-        newScore    = newScore,
+        key           = key,
+        itemLink      = entry.itemLink,
+        itemID        = entry.itemID,
+        awardedTo     = fullName,
+        response      = winnerResponse,
+        pointsSpent   = pointsSpent,
+        newScore      = newScore,
+        guildKey      = gk,
+        rosterVersion = rosterVer,
+        rosterHash    = rosterHash,
     })
 
-    -- Remove from pending loot
+    -- Remove from pending loot; schedule idle clear if queue is now empty
     PP.Repo.Loot:ClearEntry(key)
+    if next(PP.Repo.Loot:GetAll()) == nil then
+        PP.Loot:_ScheduleIdleClear()
+    end
 
-    PP.Loot:_AnnounceIfLootClear()
     PP:Print(entry.itemLink .. " awarded to " .. shortName)
     PP:RefreshLootMasterWindow()
     PP:RefreshMainWindow()
     PP:RefreshLootResponseFrame()
-end
-
----------------------------------------------------------------------------
--- _AnnounceIfLootClear()
--- Called after Award/Cancel. If the raid leader just cleared the last item,
--- announces loot completion to the group channel.
----------------------------------------------------------------------------
-function PP.Loot:_AnnounceIfLootClear()
-    if not PP:IsRaidLeader() then return end
-    if not IsInGroup() then return end
-    if next(PP.Repo.Loot:GetAll()) ~= nil then return end
-    PP:BroadcastCritical(PP.MSG.LOOT_CLEAR, {})
 end
 
 ---------------------------------------------------------------------------

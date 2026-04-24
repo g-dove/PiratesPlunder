@@ -779,6 +779,31 @@ function PP:DrawSettingsTab(container)
         syncGroup:AddChild(broadcastBtn)
     end
 
+    -- ── Loot section ─────────────────────────────────────────────────────────
+    local lootHead = AceGUI:Create("Heading")
+    lootHead:SetFullWidth(true)
+    lootHead:SetText("Loot")
+    scroll:AddChild(lootHead)
+
+    local lootDesc = AceGUI:Create("Label")
+    lootDesc:SetFullWidth(true)
+    lootDesc:SetText("Clear any loot items stuck on your response frame. Local only — does not affect other players.\n")
+    scroll:AddChild(lootDesc)
+
+    local lootGroup = AceGUI:Create("SimpleGroup")
+    lootGroup:SetFullWidth(true)
+    lootGroup:SetLayout("Flow")
+    scroll:AddChild(lootGroup)
+
+    local clearLootBtn = AceGUI:Create("Button")
+    clearLootBtn:SetText("Clear My Loot Display")
+    clearLootBtn:SetWidth(180)
+    clearLootBtn:SetCallback("OnClick", function()
+        PP:LocalClearLoot()
+        PP:Print("Loot display cleared.")
+    end)
+    lootGroup:AddChild(clearLootBtn)
+
     -- ── Manage Custom Rosters section ───────────────────────────────────────
     local manageHead = AceGUI:Create("Heading")
     manageHead:SetFullWidth(true)
