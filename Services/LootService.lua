@@ -42,10 +42,23 @@ end
 -- No broadcast. Used by the slash command and the Settings button.
 ---------------------------------------------------------------------------
 function PP:LocalClearLoot()
+    PP.Loot:_CancelIdleClear()
     PP.Repo.Loot:WipeAll()
     self:CloseLootPopups()
     self:RefreshLootMasterWindow()
     self:RefreshLootResponseFrame()
+end
+
+---------------------------------------------------------------------------
+-- OnPartyLeaderChanged()
+-- Leadership transferred. Cancel any timer held as the old leader and, if
+-- we are the new leader with an empty queue, take over the idle clear.
+---------------------------------------------------------------------------
+function PP:OnPartyLeaderChanged()
+    PP.Loot:_CancelIdleClear()
+    if PP:IsRaidLeader() and IsInGroup() and next(PP.Repo.Loot:GetAll()) == nil then
+        PP.Loot:_ScheduleIdleClear()
+    end
 end
 
 ---------------------------------------------------------------------------
@@ -159,7 +172,10 @@ function PP.Loot:Cancel(key)
     if not PP.Repo.Loot:GetEntry(key) then return end
     PP.Repo.Loot:ClearEntry(key)
 
-    PP:BroadcastCritical(PP.MSG.LOOT_CANCEL, { key = key })
+    PP:BroadcastCritical(PP.MSG.LOOT_CANCEL, {
+        key      = key,
+        guildKey = PP:GetActiveGuildKey(),
+    })
     if next(PP.Repo.Loot:GetAll()) == nil then
         PP.Loot:_ScheduleIdleClear()
     end

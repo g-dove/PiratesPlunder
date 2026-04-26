@@ -252,7 +252,22 @@ end
 -- Received from raid leader after 60s of no pending loot — clears any items
 -- stuck on the response frame that were missed during distribution.
 function PP:HandleLootClear(sender)
-    if next(PP.Repo.Loot:GetAll()) == nil then return end
+    -- Only accept from the current raid leader
+    local isLeader = false
+    for i = 1, GetNumGroupMembers() do
+        local name, rank = GetRaidRosterInfo(i)
+        if rank == 2 and self:GetFullName(name) == sender then
+            isLeader = true
+            break
+        end
+    end
+    if not isLeader then return end
+
+    local pendingLoot = PP.Repo.Loot:GetAll()
+    if next(pendingLoot) == nil then return end
+    for lootKey in pairs(pendingLoot) do
+        PP._completedLootKeys[lootKey] = true
+    end
     PP:LocalClearLoot()
 end
 
@@ -816,18 +831,10 @@ function PP:HandleLootAward(data, sender)
         PP.Session:RecordItemAward(data.itemLink, data.itemID, data.awardedTo, data.pointsSpent, data.response, data.key)
     end
     -- Apply score deduction to the winner
-    if data.awardedTo then
+    if data.awardedTo and data.newScore ~= nil then
         local roster = PP.Repo.Roster:GetRoster(data.guildKey)
         if roster[data.awardedTo] then
-            if data.newScore ~= nil then
-                roster[data.awardedTo].score = data.newScore
-            elseif data.response == PP.RESPONSE.TRANSMOG then
-                roster[data.awardedTo].score = math.max(0, (roster[data.awardedTo].score or 0) - 1)
-            elseif data.response == PP.RESPONSE.MINOR then
-                roster[data.awardedTo].score = PP:GetMinorUpgradeScore(data.awardedTo)
-            else
-                roster[data.awardedTo].score = 0
-            end
+            roster[data.awardedTo].score = data.newScore
         end
     end
     -- Advance local rosterVersion to match the loot master and verify hash.
@@ -836,11 +843,14 @@ function PP:HandleLootAward(data, sender)
     if data.rosterVersion and data.guildKey then
         local gd = PP.Repo.Roster:GetData(data.guildKey)
         if gd then
-            if data.rosterVersion > gd.rosterVersion then
-                gd.rosterVersion = data.rosterVersion
-            end
-            if data.rosterHash and ComputeRosterHash(gd.roster) ~= data.rosterHash then
+            if data.rosterVersion > gd.rosterVersion + 1 then
+                -- Gap: missed prior delta(s). Don't bump version; full sync will fix it.
                 self:ScheduleTimer(function() self:RequestSync() end, math.random())
+            elseif data.rosterVersion == gd.rosterVersion + 1 then
+                gd.rosterVersion = data.rosterVersion
+                if data.rosterHash and ComputeRosterHash(gd.roster) ~= data.rosterHash then
+                    self:ScheduleTimer(function() self:RequestSync() end, math.random())
+                end
             end
         end
     end
