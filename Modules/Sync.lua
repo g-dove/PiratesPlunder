@@ -398,7 +398,24 @@ function PP:RequestSync()
         activeSessionID = activeSessionID,
         hash            = gd and ComputeRosterHash(gd.roster) or nil,
     }
+    PP._lastSyncRequestSent = time()
     self:SendAddonMessage(PP.MSG.SYNC_REQUEST, payload)
+end
+
+-- Window (seconds) during which a whispered SYNC_FULL is treated as a reply
+-- to our recent RequestSync and allowed to auto-create foreign guild records.
+local SYNC_REQUEST_TRUST_WINDOW = 15
+
+function PP:_isSenderInGroup(sender)
+    if not sender then return false end
+    local count = GetNumGroupMembers() or 0
+    for i = 1, count do
+        local name = GetRaidRosterInfo(i)
+        if name and self:GetFullName(name) == sender then
+            return true
+        end
+    end
+    return false
 end
 
 function PP:SendFullSync(guildKey, target)
@@ -489,11 +506,17 @@ function PP:HandleSyncFull(data, sender, distribution)
     -- Only accept data for guild keys we already know about or that match our
     -- own guild / active key.  This prevents foreign guild records from being
     -- auto-created in our database just because an officer has stale history.
-    -- Whispered SYNC_FULL was sent specifically to us in response to our request,
-    -- so trust foreign-guild data (auto-creates the local record).
+    -- Whispered SYNC_FULL is only trusted when (a) it arrived shortly after we
+    -- issued a RequestSync and (b) the sender is in our current group. Without
+    -- both, an unsolicited whisper from anyone running the addon could inject
+    -- arbitrary guild keys into the local DB.
     local myGuild      = self:GetPlayerGuild()
     local activeKey    = self:GetActiveGuildKey()
+    local recentReq    = PP._lastSyncRequestSent
+                          and (time() - PP._lastSyncRequestSent) <= SYNC_REQUEST_TRUST_WINDOW
     local trustForeign = (distribution == "WHISPER")
+                          and recentReq
+                          and self:_isSenderInGroup(sender)
     for gk, incoming in pairs(data.guilds) do
         -- Skip keys that are wholly foreign to this client (broadcast only)
         if gk ~= myGuild and gk ~= activeKey and not self.db.global.guilds[gk] and not trustForeign then
