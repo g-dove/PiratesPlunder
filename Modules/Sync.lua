@@ -121,7 +121,7 @@ function PP:OnCommReceived(prefix, message, distribution, sender)
         self:HandleSyncRequest(sender, data)
 
     elseif msgType == PP.MSG.SYNC_FULL then
-        self:HandleSyncFull(data, sender)
+        self:HandleSyncFull(data, sender, distribution)
 
     elseif msgType == PP.MSG.ROSTER_UPDATE then
         self:HandleRosterUpdate(data, sender)
@@ -401,17 +401,22 @@ function PP:RequestSync()
     self:SendAddonMessage(PP.MSG.SYNC_REQUEST, payload)
 end
 
-function PP:SendFullSync(guildKey)
-    local now = time()
-    if PP._lastFullSyncSent and (now - PP._lastFullSyncSent) < FULL_SYNC_COOLDOWN then
-        if PP._debug then
-            self:Print("[Sync] Full sync suppressed (cooldown)")
+function PP:SendFullSync(guildKey, target)
+    -- Cooldown only applies to broadcasts; targeted whispers respond to a
+    -- specific request and must not be suppressed by an unrelated broadcast.
+    if not target then
+        local now = time()
+        if PP._lastFullSyncSent and (now - PP._lastFullSyncSent) < FULL_SYNC_COOLDOWN then
+            if PP._debug then
+                self:Print("[Sync] Full sync suppressed (cooldown)")
+            end
+            return
         end
-        return
+        PP._lastFullSyncSent = now
     end
-    PP._lastFullSyncSent = now
     if PP._debug then
-        self:Print("[Sync] Full sync broadcast" .. (guildKey and (" [" .. guildKey .. "]") or " [all guilds]"))
+        local label = target and (" -> " .. self:GetShortName(target)) or " (broadcast)"
+        self:Print("[Sync] Full sync" .. label .. (guildKey and (" [" .. guildKey .. "]") or " [all guilds]"))
     end
     local guilds = {}
     if guildKey then
@@ -427,7 +432,7 @@ function PP:SendFullSync(guildKey)
         raidSettings = {
             autoPassEpicRolls = self.db.global.autoPassEpicRolls,
         },
-    })
+    }, target)
 end
 
 ---------------------------------------------------------------------------
@@ -439,15 +444,12 @@ end
 -- all online officers from whispering back simultaneously.
 function PP:HandleSyncRequest(sender, data)
     if not self:CanModify() then return end
-    local gk = (data and data.guildKey) or self:GetActiveGuildKey()
-    -- Only respond if the requester's guild matches ours
-    local myGuild = self:GetPlayerGuild()
-    if not myGuild or gk ~= myGuild then return end
+    -- Respond using OUR active guild key, not the requester's.  A joiner whose
+    -- _activeGuildKey is still stale (own guild instead of the raid leader's)
+    -- would otherwise be ignored by every officer in the raid.
+    local gk = self:GetActiveGuildKey()
     local gd = PP.Repo.Roster:GetData(gk)
-    if not gd then return end
-    -- Only respond when we have an active session — without one there is nothing
-    -- meaningful to restore and we avoid syncing roster data to non-members.
-    if not gd.activeSessionID then return end
+    if not gd or not gd.activeSessionID then return end
     local requesterVersion   = data and data.rosterVersion   or -1
     local requesterRaidItems = data and data.raidItemCount   or -1
     -- Count our own awarded items across all sessions
@@ -455,43 +457,46 @@ function PP:HandleSyncRequest(sender, data)
     for _, session in pairs(gd.sessions or {}) do
         myRaidItems = myRaidItems + #(session.items or {})
     end
-    -- Respond if roster OR raid-award records are behind.
-    -- Also respond if active session IDs differ — LEADER_LEFT ends sessions
-    -- without changing versions, so version parity alone is not enough to
-    -- detect that the requester needs a restore.
     local myActiveID        = gd.activeSessionID
     local requesterActiveID = data and data.activeSessionID
-    -- Only treat a session-ID mismatch as a sync trigger when we actually have
-    -- an active session to offer.  If we have no session, responding would just
-    -- send a large payload that can't help the requester restore anything.
     local sessionMismatch   = (myActiveID ~= requesterActiveID)
                            and (myActiveID ~= nil or requesterActiveID ~= nil)
                            and myActiveID ~= nil
+    -- Roster comparison only meaningful when requester referenced the same
+    -- guild key we're about to respond with.  Otherwise treat as not-synced.
+    local sameGuild = (data and data.guildKey == gk)
     local rosterSynced
-    if data and data.hash then
+    if sameGuild and data.hash then
         rosterSynced = (ComputeRosterHash(gd.roster) == data.hash)
-    else
+    elseif sameGuild then
         rosterSynced = (requesterVersion >= gd.rosterVersion)
+    else
+        rosterSynced = false
     end
     if rosterSynced and requesterRaidItems >= myRaidItems and not sessionMismatch then return end
-    -- Random jitter 0.3-1.5 s so multiple officers don't reply simultaneously
+    -- Random jitter 0.3-1.5 s so multiple officers don't reply simultaneously.
+    -- Whisper to the requester so the cooldown on broadcast SendFullSync cannot
+    -- swallow the reply.
     local delay = 0.3 + math.random() * 1.2
     self:ScheduleTimer(function()
-        self:SendFullSync(gk)
+        self:SendFullSync(gk, sender)
     end, delay)
 end
 
 -- Receive full sync data
-function PP:HandleSyncFull(data, sender)
+function PP:HandleSyncFull(data, sender, distribution)
     if not data or not data.guilds then return end
     -- Only accept data for guild keys we already know about or that match our
     -- own guild / active key.  This prevents foreign guild records from being
     -- auto-created in our database just because an officer has stale history.
-    local myGuild   = self:GetPlayerGuild()
-    local activeKey = self:GetActiveGuildKey()
+    -- Whispered SYNC_FULL was sent specifically to us in response to our request,
+    -- so trust foreign-guild data (auto-creates the local record).
+    local myGuild      = self:GetPlayerGuild()
+    local activeKey    = self:GetActiveGuildKey()
+    local trustForeign = (distribution == "WHISPER")
     for gk, incoming in pairs(data.guilds) do
-        -- Skip keys that are wholly foreign to this client
-        if gk ~= myGuild and gk ~= activeKey and not self.db.global.guilds[gk] then
+        -- Skip keys that are wholly foreign to this client (broadcast only)
+        if gk ~= myGuild and gk ~= activeKey and not self.db.global.guilds[gk] and not trustForeign then
             -- (do nothing – ignore this guild's data entirely)
         else
             local local_gd = PP.Repo.Roster:EnsureData(gk)
@@ -569,6 +574,13 @@ function PP:HandleSyncFull(data, sender)
                 if IsInRaid() and gk == activeKey then
                     PP.Session:CheckLeaderPresent()
                 end
+            elseif incoming.activeSessionID == nil
+                   and incomingSessionVer > localSessionVer
+                   and local_gd.activeSessionID then
+                -- Sender authoritatively cleared their active session at a
+                -- newer version than ours; end our stale local session too.
+                PP.Session:End(PP.SESSION_END.SYNC_FULL, local_gd.activeSessionID, gk)
+                local_gd.activeSessionVersion = incomingSessionVer
             end
         end
     end
@@ -826,9 +838,11 @@ function PP:HandleLootAward(data, sender)
         if PP._seenAckIds[key] then return end
         PP._seenAckIds[key] = true
     end
-    -- Record item in raid history for all clients
+    -- Record item in raid history for all clients.  Use the guildKey from the
+    -- award payload so receivers with a stale _activeGuildKey still write the
+    -- item into the correct session.
     if data.itemLink and data.awardedTo then
-        PP.Session:RecordItemAward(data.itemLink, data.itemID, data.awardedTo, data.pointsSpent, data.response, data.key)
+        PP.Session:RecordItemAward(data.itemLink, data.itemID, data.awardedTo, data.pointsSpent, data.response, data.key, data.guildKey)
     end
     -- Apply score deduction to the winner
     if data.awardedTo and data.newScore ~= nil then

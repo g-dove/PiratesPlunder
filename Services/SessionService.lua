@@ -282,11 +282,21 @@ function PP.Session:AddBoss(encounterID, encounterName)
 end
 
 ---------------------------------------------------------------------------
--- RecordItemAward(itemLink, itemID, awardedTo, pointsSpent, response, lootKey)
--- Moved from PP:RecordItemAward() in Raid.lua.
+-- RecordItemAward(itemLink, itemID, awardedTo, pointsSpent, response, lootKey, guildKey)
+-- guildKey is optional; when supplied (e.g. from a LOOT_AWARD payload) we
+-- look up that guild's active session directly rather than relying on the
+-- receiver's _activeGuildKey, which may be stale during the join handshake.
 ---------------------------------------------------------------------------
-function PP.Session:RecordItemAward(itemLink, itemID, awardedTo, pointsSpent, response, lootKey)
-    local session = PP.Repo.Roster:GetActiveSession()
+function PP.Session:RecordItemAward(itemLink, itemID, awardedTo, pointsSpent, response, lootKey, guildKey)
+    local session
+    if guildKey then
+        local gd = PP.Repo.Roster:GetData(guildKey)
+        if gd and gd.activeSessionID then
+            session = gd.sessions[gd.activeSessionID]
+        end
+    else
+        session = PP.Repo.Roster:GetActiveSession()
+    end
     if not session then return end
     session.items[#session.items + 1] = {
         itemLink    = itemLink,
@@ -295,6 +305,6 @@ function PP.Session:RecordItemAward(itemLink, itemID, awardedTo, pointsSpent, re
         pointsSpent = pointsSpent or 0,
         response    = response or PP.RESPONSE.NEED,
         time        = time(),
-        key         = lootKey,  -- loot key for LOOT_STATE_QUERY matching
+        key         = lootKey,
     }
 end

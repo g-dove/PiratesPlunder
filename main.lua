@@ -621,14 +621,38 @@ end
 ---------------------------------------------------------------------------
 -- Event stubs (implementations in module files)
 ---------------------------------------------------------------------------
+-- Bounded retry loop for the post-join sync handshake.  Each attempt:
+-- sends RequestSync, then 10 s later (long enough for a NORMAL-priority
+-- SYNC_FULL reply to fully arrive through ChatThrottleLib) checks whether
+-- we now have an active session.  Stops as soon as one is adopted, when
+-- we leave the group, or when no other PP users are present in the raid.
+function PiratesPlunder:_ScheduleJoinSync(attempt)
+    attempt = attempt or 1
+    if attempt > 3 then return end
+    local delay = (attempt == 1) and 3 or 6
+    self:ScheduleTimer(function()
+        if not IsInGroup() then return end
+        if attempt == 1 then
+            self:SendAddonMessage(PP.MSG.VERSION_REQUEST, {})
+        end
+        self:RequestSync()
+        self:ScheduleTimer(function()
+            if IsInGroup()
+               and PP._ppUsers and next(PP._ppUsers)
+               and not PP.Repo.Roster:HasActiveSession() then
+                self:_ScheduleJoinSync(attempt + 1)
+            end
+        end, 10)
+    end, delay)
+end
+
 function PiratesPlunder:OnGroupRosterUpdate()
     local nowInGroup = IsInGroup()
-    -- Auto-request sync when first joining a group
+    -- Auto-request sync when first joining a group, with bounded retries
+    -- so a dropped SYNC_REQUEST or suppressed reply doesn't leave us
+    -- stranded without the active session.
     if nowInGroup and not self._wasInGroup then
-        self:ScheduleTimer(function()
-            self:SendAddonMessage(PP.MSG.VERSION_REQUEST, {})
-            self:RequestSync()
-        end, 3) -- delay lets the comms channel open and officers load in
+        self:_ScheduleJoinSync(1)
     end
     self._wasInGroup = nowInGroup
 
