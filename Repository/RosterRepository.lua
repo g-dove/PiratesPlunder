@@ -178,6 +178,7 @@ end
 -- current roster version. Returns nil for unknown / sandbox guilds.
 ---------------------------------------------------------------------------
 function PP.Repo.Roster:BuildRosterSnapshot(gk)
+    if PP._sandbox or gk == "__sandbox__" then return nil end
     local gd = self:GetData(gk)
     if not gd then return nil end
     local entries = {}

@@ -41,10 +41,13 @@ function PP.Session:End(reason, sessionID, guildKey)
     -- Capture a roster snapshot tagged with the current rosterVersion. Every
     -- client that runs End() locally writes its own snapshot; rosterVersion
     -- arbitration in SetSessionSnapshot keeps the highest-version copy.
-    -- RESET is the one path that should not produce a snapshot — the user
-    -- has explicitly wiped data and the roster being captured is empty.
+    -- RESET wipes data deliberately; SYNC_DELETE arrives after the session
+    -- and its snapshot have already been removed, so capturing here would
+    -- resurrect a snapshot for a deleted session.
     local capturedSnapshot
-    if reason ~= PP.SESSION_END.RESET then
+    local skipSnapshot = (reason == PP.SESSION_END.RESET)
+                          or (reason == PP.SESSION_END.SYNC_DELETE)
+    if not skipSnapshot then
         capturedSnapshot = PP.Repo.Roster:BuildRosterSnapshot(guildKey)
         if capturedSnapshot then
             PP.Repo.Roster:SetSessionSnapshot(guildKey, sessionID, capturedSnapshot)

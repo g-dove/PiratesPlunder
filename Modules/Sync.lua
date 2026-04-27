@@ -188,10 +188,10 @@ function PP:OnCommReceived(prefix, message, distribution, sender)
         self:HandleLootClear(sender)
 
     elseif msgType == PP.MSG.SNAPSHOT_REQUEST then
-        self:HandleSnapshotRequest(sender, data)
+        self:HandleSnapshotRequest(sender, data, distribution)
 
     elseif msgType == PP.MSG.SNAPSHOT_REPLY then
-        self:HandleSnapshotReply(data, sender)
+        self:HandleSnapshotReply(data, sender, distribution)
     end
 end
 
@@ -1075,20 +1075,30 @@ function PP:RequestSessionSnapshots()
     self:Print("Fetching session snapshots from group...")
 end
 
-function PP:HandleSnapshotRequest(sender, data)
+function PP:HandleSnapshotRequest(sender, data, distribution)
     if not data or not data.guildKey then return end
+    -- Only respond to group-channel requests, or whispers from current group
+    -- members. Prevents a stranger's whisper from harvesting session data.
+    local trusted = (distribution == "RAID" or distribution == "PARTY")
+                     or ((distribution == "WHISPER") and self:_isSenderInGroup(sender))
+    if not trusted then return end
+
     local gd = PP.Repo.Roster:GetData(data.guildKey)
     if not gd or not gd.sessionSnapshots then return end
 
     local snapshots = {}
     local count = 0
     local requesterVersions = data.versions or {}
-    for sessionID, snap in pairs(gd.sessionSnapshots) do
-        local theirVer = requesterVersions[sessionID] or -1
-        local mineVer  = snap.rosterVersion or 0
-        if mineVer > theirVer then
-            snapshots[sessionID] = snap
-            count = count + 1
+    -- Iterate the requester's advertised versions only — never volunteer
+    -- snapshots for sessionIDs they did not ask about.
+    for sessionID, theirVer in pairs(requesterVersions) do
+        local snap = gd.sessionSnapshots[sessionID]
+        if snap then
+            local mineVer = snap.rosterVersion or 0
+            if mineVer > (theirVer or -1) then
+                snapshots[sessionID] = snap
+                count = count + 1
+            end
         end
     end
     if count == 0 then return end
@@ -1106,8 +1116,15 @@ function PP:HandleSnapshotRequest(sender, data)
     end, delay)
 end
 
-function PP:HandleSnapshotReply(data, sender)
+function PP:HandleSnapshotReply(data, sender, distribution)
     if not data or not data.guildKey or not data.snapshots then return end
+    -- Only accept replies from group members in response to our own request.
+    -- Untrusted whispers could otherwise inject high-rosterVersion entries
+    -- that would override legitimate snapshots via SetSessionSnapshot.
+    if not PP._lastSnapshotFetchSent then return end
+    local trusted = (distribution == "RAID" or distribution == "PARTY")
+                     or ((distribution == "WHISPER") and self:_isSenderInGroup(sender))
+    if not trusted then return end
     local applied = 0
     for sessionID, snap in pairs(data.snapshots) do
         if PP.Repo.Roster:SetSessionSnapshot(data.guildKey, sessionID, snap) then
