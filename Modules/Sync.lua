@@ -56,6 +56,10 @@ local MSG_PRIORITY = {
     -- Large payloads / background recovery
     [PP.MSG.LOOT_STATE_QUERY] = "BULK",
     [PP.MSG.RAID_SETTINGS]    = "BULK",
+    -- Snapshot fetch is user-triggered backfill; ship at BULK so it never
+    -- competes with realtime loot/session traffic.
+    [PP.MSG.SNAPSHOT_REQUEST] = "BULK",
+    [PP.MSG.SNAPSHOT_REPLY]   = "BULK",
 }
 
 ---------------------------------------------------------------------------
@@ -182,6 +186,12 @@ function PP:OnCommReceived(prefix, message, distribution, sender)
 
     elseif msgType == PP.MSG.LOOT_CLEAR then
         self:HandleLootClear(sender)
+
+    elseif msgType == PP.MSG.SNAPSHOT_REQUEST then
+        self:HandleSnapshotRequest(sender, data)
+
+    elseif msgType == PP.MSG.SNAPSHOT_REPLY then
+        self:HandleSnapshotReply(data, sender)
     end
 end
 
@@ -362,11 +372,12 @@ function PP:BroadcastSessionCreate(sessionID)
     })
 end
 
-function PP:BroadcastSessionClose(sessionID)
+function PP:BroadcastSessionClose(sessionID, snapshot)
     if not IsInGroup() then return end
     self:BroadcastCritical(PP.MSG.SESSION_CLOSE, {
         raidID   = sessionID,
         guildKey = self:GetActiveGuildKey(),
+        snapshot = snapshot,
     })
 end
 
@@ -769,6 +780,7 @@ function PP:HandleSessionDelete(data, sender)
     if data.version and data.version <= gd.rosterVersion then return end
 
     gd.sessions[data.raidID] = nil
+    if gd.sessionSnapshots then gd.sessionSnapshots[data.raidID] = nil end
     gd.rosterVersion = data.version
 
     -- Record tombstone so this deletion propagates to offline peers via future syncs
@@ -783,6 +795,10 @@ function PP:HandleSessionDelete(data, sender)
     if self._raidDetailWindow then
         self._raidDetailWindow:Release()
         self._raidDetailWindow = nil
+    end
+    if self._snapshotWindow then
+        self._snapshotWindow:Release()
+        self._snapshotWindow = nil
     end
 
     self:Print("A session record was deleted by an officer.")
@@ -802,6 +818,12 @@ function PP:HandleSessionClose(data, sender)
     end
     if gd.activeSessionID == data.raidID then
         PP.Session:End(PP.SESSION_END.SYNC_RECEIVED, data.raidID, gk)
+    end
+    -- Apply snapshot last so our own End() (which captures a local snapshot at
+    -- our current rosterVersion) cannot overwrite the officer's broadcast copy
+    -- if theirs is newer. SetSessionSnapshot already arbitrates by version.
+    if data.snapshot then
+        PP.Repo.Roster:SetSessionSnapshot(gk, data.raidID, data.snapshot)
     end
     self:RefreshMainWindow()
 end
@@ -1009,5 +1031,99 @@ function PP:HandleLootCancel(data, sender)
     end
     self:RefreshLootMasterWindow()
     self:RefreshLootResponseFrame()
+end
+
+---------------------------------------------------------------------------
+-- Roster snapshot fetch (user-triggered backfill)
+--
+-- Snapshots are NOT shipped in SYNC_FULL. They are exchanged inline on
+-- SESSION_CLOSE for online recipients, captured locally on every End() for
+-- everyone else, and backfilled via this BULK request/reply pair when the
+-- user clicks "Fetch Session Snapshots" under Settings.
+--
+-- The request advertises every (sessionID, localRosterVersion) tuple the
+-- requester knows about. Responders return any snapshot whose locally-stored
+-- rosterVersion exceeds the requester's. Arbitration on the requesting client
+-- is the same SetSessionSnapshot version check used everywhere else.
+---------------------------------------------------------------------------
+local SNAPSHOT_FETCH_COOLDOWN = 5  -- seconds between user-triggered fetches
+
+function PP:RequestSessionSnapshots()
+    if not IsInGroup() then
+        self:Print("You must be in a group to fetch session snapshots.")
+        return
+    end
+    local now = time()
+    if PP._lastSnapshotFetchSent and (now - PP._lastSnapshotFetchSent) < SNAPSHOT_FETCH_COOLDOWN then
+        self:Print("Snapshot fetch already in progress.")
+        return
+    end
+    PP._lastSnapshotFetchSent = now
+
+    local gk = self:GetActiveGuildKey()
+    local versions = PP.Repo.Roster:GetAllSnapshotVersions(gk)
+    PP._snapshotFetchAppliedCount = 0
+    self:SendAddonMessage(PP.MSG.SNAPSHOT_REQUEST, {
+        guildKey = gk,
+        versions = versions,
+    })
+    if PP._debug then
+        local nSessions = 0
+        for _ in pairs(versions) do nSessions = nSessions + 1 end
+        self:Print("[Sync] Snapshot fetch requested for " .. nSessions .. " session(s)")
+    end
+    self:Print("Fetching session snapshots from group...")
+end
+
+function PP:HandleSnapshotRequest(sender, data)
+    if not data or not data.guildKey then return end
+    local gd = PP.Repo.Roster:GetData(data.guildKey)
+    if not gd or not gd.sessionSnapshots then return end
+
+    local snapshots = {}
+    local count = 0
+    local requesterVersions = data.versions or {}
+    for sessionID, snap in pairs(gd.sessionSnapshots) do
+        local theirVer = requesterVersions[sessionID] or -1
+        local mineVer  = snap.rosterVersion or 0
+        if mineVer > theirVer then
+            snapshots[sessionID] = snap
+            count = count + 1
+        end
+    end
+    if count == 0 then return end
+
+    -- Random jitter so multiple peers don't reply at exactly the same instant.
+    local delay = 0.2 + math.random() * 0.8
+    self:ScheduleTimer(function()
+        self:SendAddonMessage(PP.MSG.SNAPSHOT_REPLY, {
+            guildKey  = data.guildKey,
+            snapshots = snapshots,
+        }, sender)
+        if PP._debug then
+            self:Print("[Sync] Snapshot reply -> " .. self:GetShortName(sender) .. " (" .. count .. " snapshot(s))")
+        end
+    end, delay)
+end
+
+function PP:HandleSnapshotReply(data, sender)
+    if not data or not data.guildKey or not data.snapshots then return end
+    local applied = 0
+    for sessionID, snap in pairs(data.snapshots) do
+        if PP.Repo.Roster:SetSessionSnapshot(data.guildKey, sessionID, snap) then
+            applied = applied + 1
+        end
+    end
+    PP._snapshotFetchAppliedCount = (PP._snapshotFetchAppliedCount or 0) + applied
+    if PP._debug then
+        self:Print("[Sync] Snapshot reply from " .. self:GetShortName(sender)
+            .. ": applied " .. applied .. " / " .. (function()
+                local n = 0; for _ in pairs(data.snapshots) do n = n + 1 end; return n
+            end)())
+    end
+    if applied > 0 then
+        self:Print("Received " .. applied .. " session snapshot(s) from " .. self:GetShortName(sender) .. ".")
+        self:RefreshMainWindow()
+    end
 end
 
