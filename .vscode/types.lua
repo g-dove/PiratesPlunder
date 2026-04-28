@@ -26,6 +26,7 @@
 ---@field RAID_SETTINGS    string
 ---@field SESSION_DELETE   string
 ---@field LOOT_VOTE        string
+---@field LOOT_CLEAR       string
 ---@field LOOT_STATE_QUERY string
 ---@field LOOT_STATE_REPLY string
 ---@field VERSION_REQUEST  string
@@ -33,6 +34,8 @@
 ---@field ROSTER_DELTA     string
 ---@field GROUP_SCORE      string
 ---@field GROUP_SCORE_ACK  string
+---@field SNAPSHOT_REQUEST string
+---@field SNAPSHOT_REPLY   string
 
 ---@class PPResponseConstants
 ---@field NEED     string
@@ -110,6 +113,31 @@ function PPRosterRepo:BumpRosterVersion(guildKey) end
 ---@return number
 function PPRosterRepo:GetRosterVersion(gk) end
 
+--- Returns the stored end-of-session roster snapshot, if any.
+---@param gk string
+---@param sessionID string
+---@return table|nil snapshot  { capturedAt:number, rosterVersion:number, entries:table<string, table> }
+function PPRosterRepo:GetSessionSnapshot(gk, sessionID) end
+
+--- Stores a snapshot only when its rosterVersion exceeds what we already hold.
+---@param gk string
+---@param sessionID string
+---@param snapshot table
+---@return boolean stored
+function PPRosterRepo:SetSessionSnapshot(gk, sessionID, snapshot) end
+
+--- Builds a snapshot of the current roster tagged with the current rosterVersion.
+--- Returns nil for sandbox / unknown guilds.
+---@param gk string
+---@return table|nil snapshot
+function PPRosterRepo:BuildRosterSnapshot(gk) end
+
+--- Returns { [sessionID] = rosterVersion } for every snapshot stored under gk.
+--- Sessions present locally without a snapshot map to 0. Used to build SNAPSHOT_REQUEST payloads.
+---@param gk string
+---@return table<string, number>
+function PPRosterRepo:GetAllSnapshotVersions(gk) end
+
 ---------------------------------------------------------------------------
 -- Repository layer – Repository/LootRepository.lua
 ---------------------------------------------------------------------------
@@ -184,7 +212,8 @@ function PPSession:AddBoss(encounterID, encounterName) end
 ---@param pointsSpent number
 ---@param response    string  PP.RESPONSE.*
 ---@param lootKey     string
-function PPSession:RecordItemAward(itemLink, itemID, awardedTo, pointsSpent, response, lootKey) end
+---@param guildKey?   string  optional; route the award into this guild's active session (used when the receiver's _activeGuildKey is stale)
+function PPSession:RecordItemAward(itemLink, itemID, awardedTo, pointsSpent, response, lootKey, guildKey) end
 
 ---------------------------------------------------------------------------
 -- Service layer – Services/RosterService.lua
@@ -244,6 +273,11 @@ function PPLootService:SubmitResponse(key, response) end
 
 function PPLootService:PostAll() end
 
+--- Raid-leader-only: schedules a 60 s LOOT_CLEAR broadcast once the queue empties.
+function PPLootService:_ScheduleIdleClear() end
+
+function PPLootService:_CancelIdleClear() end
+
 ---------------------------------------------------------------------------
 -- Main addon object – methods spread across main.lua + all module files
 ---------------------------------------------------------------------------
@@ -269,11 +303,16 @@ function PPLootService:PostAll() end
 ---@field _sandboxMod   boolean
 ---@field _debug        boolean
 ---@field _ppUsers      table<string, boolean>|nil
----@field _retryQueue   table<string, table>
 ---@field _seenAckIds   table<string, boolean>
+---@field _completedLootKeys      table<string, boolean>
 ---@field _criticalAckSnapshots table<string, table>|nil
 ---@field _groupScoreHashes     table<string, number>|nil
 ---@field _lastFullSyncSent     number|nil
+---@field _lastSyncRequestSent  number|nil
+---@field _lastSnapshotFetchSent number|nil
+---@field _snapshotFetchAppliedCount number|nil
+---@field _lootIdleTimer        any|nil
+---@field _snapshotWindow       table|nil
 ---@field _lootStateVerifyPending boolean|nil
 ---@field _currentTradePartner string|nil
 ---@field _currentTradeSlotted table|nil
@@ -390,6 +429,7 @@ function PPAddon:OnGroupRosterUpdate() end
 function PPAddon:OnEncounterEnd(_, encounterID, encounterName, difficultyID, groupSize, success) end
 
 function PPAddon:OnGroupLeft() end
+function PPAddon:OnPartyLeaderChanged() end
 function PPAddon:CompletePendingSessionEnd() end
 function PPAddon:ShowLootResponseFrameIfNeeded() end
 function PPAddon:OnGuildRosterUpdate() end
@@ -494,10 +534,11 @@ function PPAddon:HandleRaidSettings(data, sender) end
 
 function PPAddon:BroadcastRoster() end
 
----@param msgType    string  PP.MSG.*
----@param data       table
----@param maxRetries? number  defaults to 3
-function PPAddon:BroadcastCritical(msgType, data, maxRetries) end
+--- Broadcasts to the group with an attached _ackId. Receivers echo back a roster
+--- hash; mismatches schedule a single SendFullSync. No per-member whisper retry.
+---@param msgType string  PP.MSG.*
+---@param data    table
+function PPAddon:BroadcastCritical(msgType, data) end
 
 function PPAddon:WipeRetryQueue() end
 
@@ -511,7 +552,8 @@ function PPAddon:HandleGroupScoreAck(data, sender) end
 function PPAddon:BroadcastSessionCreate(sessionID) end
 
 ---@param sessionID string
-function PPAddon:BroadcastSessionClose(sessionID) end
+---@param snapshot? table  optional roster snapshot rebuilt at session-end and shipped inline
+function PPAddon:BroadcastSessionClose(sessionID, snapshot) end
 
 ---@param sessionID  string
 ---@param guildKey   string
@@ -521,15 +563,21 @@ function PPAddon:BroadcastSessionDelete(sessionID, guildKey, newVersion) end
 function PPAddon:RequestSync() end
 
 ---@param guildKey? string
-function PPAddon:SendFullSync(guildKey) end
+---@param target?   string  optional whisper target; bypasses the broadcast cooldown
+function PPAddon:SendFullSync(guildKey, target) end
 
 ---@param sender string
 ---@param data   table
 function PPAddon:HandleSyncRequest(sender, data) end
 
----@param data   table
+---@param data         table
+---@param sender       string
+---@param distribution? string  AceComm distribution channel ("WHISPER" enforces the trust window)
+function PPAddon:HandleSyncFull(data, sender, distribution) end
+
 ---@param sender string
-function PPAddon:HandleSyncFull(data, sender) end
+---@return boolean
+function PPAddon:_isSenderInGroup(sender) end
 
 ---@param data   table
 ---@param sender string
@@ -581,6 +629,28 @@ function PPAddon:HandleLootStateReply(data) end
 ---@param sender string
 function PPAddon:HandleLootCancel(data, sender) end
 
+---@param sender string
+function PPAddon:HandleLootClear(sender) end
+
+--- User-triggered backfill: ask the group for any session snapshots they hold
+--- at a higher rosterVersion than what we have locally. 5 s cooldown.
+function PPAddon:RequestSessionSnapshots() end
+
+---@param sender       string
+---@param data         table
+---@param distribution string  AceComm distribution channel
+function PPAddon:HandleSnapshotRequest(sender, data, distribution) end
+
+---@param data         table
+---@param sender       string
+---@param distribution string
+function PPAddon:HandleSnapshotReply(data, sender, distribution) end
+
+--- Bounded post-join sync handshake: up to 3 attempts to RequestSync until an
+--- active session is adopted, the group is left, or no PP users remain.
+---@param attempt? number
+function PPAddon:_ScheduleJoinSync(attempt) end
+
 -- Modules/Trade.lua -------------------------------------------------------
 
 function PPAddon:OnTradeShow() end
@@ -609,6 +679,11 @@ function PPAddon:DrawSessionsTab(container) end
 ---@param container table
 function PPAddon:DrawSettingsTab(container) end
 
+--- Roster snapshot popup for an ended session.
+---@param guildKey  string
+---@param sessionID string
+function PPAddon:ShowRosterSnapshot(guildKey, sessionID) end
+
 -- UI/LootWindow.lua -------------------------------------------------------
 
 function PPAddon:ToggleLootMasterWindow() end
@@ -631,6 +706,10 @@ function PPAddon:CreateLootBarsFrame() end
 function PPAddon:ShowLootBars() end
 function PPAddon:HideLootBars() end
 function PPAddon:RefreshLootBars() end
+
+--- Wipe pending loot for this client only (no broadcast). Bound to /pp loot clear
+--- and the Settings tab "Clear My Loot Display" button.
+function PPAddon:LocalClearLoot() end
 
 -- UI/AwardedLootWindow.lua ------------------------------------------------
 
