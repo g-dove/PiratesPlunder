@@ -11,6 +11,7 @@ table.insert(PP._commandGroups, function(input)
     if input == "help" then
         PP:Print("/pp – Toggle main window")
         PP:Print("/pp loot (or /pp l) – Toggle loot-master window")
+        PP:Print("/pp loot clear – Clear stuck loot from your display (local only)")
         PP:Print("/pp response (or /pp r) – Toggle loot response frame")
         PP:Print("/pp version (or /pp v) – Check addon versions across the raid")
         PP:Print("/pp sandbox (or /pp s) – Toggle sandbox mode")
@@ -20,6 +21,11 @@ table.insert(PP._commandGroups, function(input)
         PP:Print("/pp status – Show officer detection info")
         PP:Print("/pp debug – Toggle sync debug output")
         PP:Print("/pp minimap – Show or hide the minimap icon")
+        return true
+
+    elseif input == "loot clear" or input == "l clear" then
+        PP:LocalClearLoot()
+        PP:Print("Loot display cleared.")
         return true
 
     elseif input == "loot" or input == "l" then

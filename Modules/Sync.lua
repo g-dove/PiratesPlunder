@@ -7,11 +7,8 @@ local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 ---------------------------------------------------------------------------
 -- Reliable broadcast state
 ---------------------------------------------------------------------------
-local RETRY_DELAY       = 4   -- seconds between whisper retry attempts
-local MAX_RETRIES       = 3   -- max whisper retries before giving up
 local FULL_SYNC_COOLDOWN = 10 -- seconds before another full sync can broadcast
 
-PP._retryQueue       = {}
 PP._seenAckIds       = {}
 PP._completedLootKeys = {}
 
@@ -39,48 +36,31 @@ end
 PP.ComputeRosterHash = ComputeRosterHash
 
 local MSG_PRIORITY = {
-    [PP.MSG.LOOT_POST]        = "ALERT",
-    [PP.MSG.LOOT_AWARD]       = "ALERT",
-    [PP.MSG.LOOT_CANCEL]      = "ALERT",
-    [PP.MSG.LOOT_INTEREST]    = "ALERT",
-    [PP.MSG.SESSION_CREATE]   = "ALERT",
-    [PP.MSG.SESSION_CLOSE]    = "ALERT",
-    [PP.MSG.ACK]              = "ALERT",
-    [PP.MSG.ROSTER_DELTA]     = "ALERT",
-    [PP.MSG.GROUP_SCORE]      = "ALERT",
-    [PP.MSG.GROUP_SCORE_ACK]  = "ALERT",
-    [PP.MSG.SYNC_REQUEST]     = "ALERT",
-    [PP.MSG.LOOT_CLEAR]       = "ALERT",
+    -- Loot lifecycle: players respond to posts, awards update scores
+    [PP.MSG.LOOT_POST]        = "NORMAL",
+    [PP.MSG.LOOT_INTEREST]    = "NORMAL",
+    [PP.MSG.LOOT_AWARD]       = "NORMAL",
+    [PP.MSG.LOOT_CANCEL]      = "NORMAL",
+    [PP.MSG.LOOT_CLEAR]       = "NORMAL",
+    -- Session lifecycle
+    [PP.MSG.SESSION_CREATE]   = "NORMAL",
+    [PP.MSG.SESSION_CLOSE]    = "NORMAL",
+    -- Sync / informational
+    [PP.MSG.ACK]              = "NORMAL",
+    [PP.MSG.ROSTER_DELTA]     = "NORMAL",
+    [PP.MSG.GROUP_SCORE]      = "NORMAL",
+    [PP.MSG.GROUP_SCORE_ACK]  = "NORMAL",
+    [PP.MSG.SYNC_REQUEST]     = "NORMAL",
+    [PP.MSG.VERSION_REQUEST]  = "NORMAL",
+    [PP.MSG.VERSION_REPLY]    = "NORMAL",
+    -- Large payloads / background recovery
     [PP.MSG.LOOT_STATE_QUERY] = "BULK",
     [PP.MSG.RAID_SETTINGS]    = "BULK",
-    [PP.MSG.VERSION_REQUEST]  = "ALERT",
-    [PP.MSG.VERSION_REPLY]    = "ALERT",
+    -- Snapshot fetch is user-triggered backfill; ship at BULK so it never
+    -- competes with realtime loot/session traffic.
+    [PP.MSG.SNAPSHOT_REQUEST] = "BULK",
+    [PP.MSG.SNAPSHOT_REPLY]   = "BULK",
 }
-
-local function snapshotGroup(self)
-    local members, me = {}, self:GetPlayerFullName()
-    if IsInRaid() then
-        for i = 1, GetNumGroupMembers() do
-            local name, _, _, _, _, _, _, online = GetRaidRosterInfo(i)
-            if name and online then
-                local full = self:GetFullName(name)
-                if full ~= me then members[full] = false end
-            end
-        end
-    else
-        for i = 1, 4 do
-            local unit = "party" .. i
-            if UnitExists(unit) and UnitIsConnected(unit) then
-                local name, realm = UnitName(unit)
-                if name then
-                    local full = self:GetFullName(name .. (realm and realm ~= "" and ("-" .. realm) or ""))
-                    if full ~= me then members[full] = false end
-                end
-            end
-        end
-    end
-    return members
-end
 
 ---------------------------------------------------------------------------
 -- Send a structured message to the raid / party
@@ -93,7 +73,11 @@ function PP:SendAddonMessage(msgType, data, target)
             local gk = data.guildKey or self:GetActiveGuildKey()
             local gd = PP.Repo.Roster:GetData(gk)
             local h  = gd and ComputeRosterHash(gd.roster) or nil
-            PP._criticalAckSnapshots[data._ackId] = { hash = h, guildKey = gk, rosterVersion = gd and gd.rosterVersion or nil }
+            local id = data._ackId
+            PP._criticalAckSnapshots[id] = { hash = h, guildKey = gk, rosterVersion = gd and gd.rosterVersion or nil, syncTriggered = false }
+            PP:ScheduleTimer(function()
+                if PP._criticalAckSnapshots then PP._criticalAckSnapshots[id] = nil end
+            end, 30)
         end
     end
     local payload = self:Serialize(msgType, data)
@@ -141,7 +125,7 @@ function PP:OnCommReceived(prefix, message, distribution, sender)
         self:HandleSyncRequest(sender, data)
 
     elseif msgType == PP.MSG.SYNC_FULL then
-        self:HandleSyncFull(data, sender)
+        self:HandleSyncFull(data, sender, distribution)
 
     elseif msgType == PP.MSG.ROSTER_UPDATE then
         self:HandleRosterUpdate(data, sender)
@@ -202,6 +186,12 @@ function PP:OnCommReceived(prefix, message, distribution, sender)
 
     elseif msgType == PP.MSG.LOOT_CLEAR then
         self:HandleLootClear(sender)
+
+    elseif msgType == PP.MSG.SNAPSHOT_REQUEST then
+        self:HandleSnapshotRequest(sender, data, distribution)
+
+    elseif msgType == PP.MSG.SNAPSHOT_REPLY then
+        self:HandleSnapshotReply(data, sender, distribution)
     end
 end
 
@@ -228,89 +218,67 @@ function PP:BroadcastRaidSettings()
 end
 
 ---------------------------------------------------------------------------
--- Reliable broadcast: initial RAID/PARTY broadcast + whisper retry for
--- members who don't ACK. Used for ephemeral loot events that have no
--- recovery path if dropped (LOOT_POST, LOOT_AWARD, LOOT_CANCEL).
+-- Reliable broadcast: broadcast to the group and attach an ackId so
+-- recipients send back their roster hash. Any hash mismatch triggers a full
+-- sync — no per-member whisper retries (WoW's RAID/PARTY channel is
+-- reliable for online members; offline/loading clients recover via
+-- RequestSync on reconnect).
 ---------------------------------------------------------------------------
-function PP:BroadcastCritical(msgType, data, maxRetries)
+function PP:BroadcastCritical(msgType, data)
     if self._sandbox or not IsInGroup() then return end
     local id = newAckId()
     data._ackId = id
-    local entry = {
-        msgType    = msgType,
-        data       = data,
-        expected   = snapshotGroup(self),
-        retries    = 0,
-        maxRetries = maxRetries or MAX_RETRIES,
-    }
-    PP._retryQueue[id] = entry
     self:SendAddonMessage(msgType, data)
-    entry.timerId = self:ScheduleTimer(function() self:_retryBroadcast(id) end, RETRY_DELAY)
-end
-
-function PP:_retryBroadcast(id)
-    local e = PP._retryQueue[id]
-    if not e then return end
-
-    local current = snapshotGroup(self)
-    for name in pairs(e.expected) do
-        if current[name] == nil then e.expected[name] = nil end
-    end
-
-    local anyPending = false
-    for _, acked in pairs(e.expected) do
-        if not acked then anyPending = true; break end
-    end
-
-    if not anyPending or e.retries >= e.maxRetries then
-        PP._retryQueue[id] = nil
-        if PP._criticalAckSnapshots then PP._criticalAckSnapshots[id] = nil end
-        return
-    end
-
-    e.retries = e.retries + 1
-    for name, acked in pairs(e.expected) do
-        if not acked and PP._ppUsers and PP._ppUsers[name] then
-            self:SendAddonMessage(e.msgType, e.data, name)
-        end
-    end
-    e.timerId = self:ScheduleTimer(function() self:_retryBroadcast(id) end, RETRY_DELAY)
 end
 
 function PP:_handleAck(data, sender)
-    local e = PP._retryQueue[data.ackId]
-    if e then
-        local full = self:GetFullName(sender)
-        if e.expected[full] == false then
-            e.expected[full] = true
+    if not data.ackId then return end
+    local snap = PP._criticalAckSnapshots and PP._criticalAckSnapshots[data.ackId]
+    if not snap then return end
+    -- Snapshot cleanup is timer-driven (30s); don't nil it here so all members' hashes are checked.
+    if snap.syncTriggered then return end
+    if not (data.hash and snap.hash and snap.rosterVersion and data.rosterVersion) then return end
+    if snap.rosterVersion == data.rosterVersion then
+        local match = snap.hash == data.hash
+        if PP._debug then
+            local label = match and "|cFF00FF00match \226\156\147|r" or "|cFFFF4400MISMATCH \226\156\151|r"
+            self:Print("[Sync] ACK hash from " .. self:GetShortName(sender) .. ": " .. label)
         end
-    end
-    if data.hash and data.ackId then
-        local snap = PP._criticalAckSnapshots and PP._criticalAckSnapshots[data.ackId]
-        if snap and snap.hash and snap.rosterVersion and data.rosterVersion then
-            if snap.rosterVersion == data.rosterVersion then
-                local match = snap.hash == data.hash
-                if PP._debug then
-                    local label = match and "|cFF00FF00match \226\156\147|r" or "|cFFFF4400MISMATCH \226\156\151|r"
-                    self:Print("[Sync] ACK hash from " .. self:GetShortName(sender) .. ": " .. label)
-                end
-                if not match then
-                    self:ScheduleTimer(function() self:SendFullSync(snap.guildKey) end, 0.5)
-                end
-            end
+        if not match then
+            snap.syncTriggered = true
+            self:ScheduleTimer(function() self:SendFullSync(snap.guildKey) end, 0.5)
         end
-    end
-    if not e and data.ackId and PP._criticalAckSnapshots then
-        PP._criticalAckSnapshots[data.ackId] = nil
     end
 end
 
 function PP:WipeRetryQueue()
-    for _, e in pairs(PP._retryQueue) do
-        if e.timerId then PP:CancelTimer(e.timerId) end
-    end
-    PP._retryQueue = {}
     PP._criticalAckSnapshots = {}
+    if PP._lootIdleTimer then
+        PP:CancelTimer(PP._lootIdleTimer)
+        PP._lootIdleTimer = nil
+    end
+end
+
+-- Received from raid leader after 60s of no pending loot — clears any items
+-- stuck on the response frame that were missed during distribution.
+function PP:HandleLootClear(sender)
+    -- Only accept from the current raid leader
+    local isLeader = false
+    for i = 1, GetNumGroupMembers() do
+        local name, rank = GetRaidRosterInfo(i)
+        if rank == 2 and self:GetFullName(name) == sender then
+            isLeader = true
+            break
+        end
+    end
+    if not isLeader then return end
+
+    local pendingLoot = PP.Repo.Loot:GetAll()
+    if next(pendingLoot) == nil then return end
+    for lootKey in pairs(pendingLoot) do
+        PP._completedLootKeys[lootKey] = true
+    end
+    PP:LocalClearLoot()
 end
 
 function PP:HandleRaidSettings(data, sender)
@@ -357,7 +325,7 @@ function PP:BroadcastRosterDelta(changed, removed)
         local nr = removed and #removed or 0
         self:Print("[Sync] Delta broadcast sent (v" .. gd.rosterVersion .. "): " .. nc .. " changed, " .. nr .. " removed")
     end
-    self:BroadcastCritical(PP.MSG.ROSTER_DELTA, {
+    self:SendAddonMessage(PP.MSG.ROSTER_DELTA, {
         changed  = changed,
         removed  = removed,
         version  = gd.rosterVersion,
@@ -404,11 +372,12 @@ function PP:BroadcastSessionCreate(sessionID)
     })
 end
 
-function PP:BroadcastSessionClose(sessionID)
+function PP:BroadcastSessionClose(sessionID, snapshot)
     if not IsInGroup() then return end
     self:BroadcastCritical(PP.MSG.SESSION_CLOSE, {
         raidID   = sessionID,
         guildKey = self:GetActiveGuildKey(),
+        snapshot = snapshot,
     })
 end
 
@@ -440,20 +409,42 @@ function PP:RequestSync()
         activeSessionID = activeSessionID,
         hash            = gd and ComputeRosterHash(gd.roster) or nil,
     }
+    PP._lastSyncRequestSent = time()
     self:SendAddonMessage(PP.MSG.SYNC_REQUEST, payload)
 end
 
-function PP:SendFullSync(guildKey)
-    local now = time()
-    if PP._lastFullSyncSent and (now - PP._lastFullSyncSent) < FULL_SYNC_COOLDOWN then
-        if PP._debug then
-            self:Print("[Sync] Full sync suppressed (cooldown)")
+-- Window (seconds) during which a whispered SYNC_FULL is treated as a reply
+-- to our recent RequestSync and allowed to auto-create foreign guild records.
+local SYNC_REQUEST_TRUST_WINDOW = 15
+
+function PP:_isSenderInGroup(sender)
+    if not sender then return false end
+    local count = GetNumGroupMembers() or 0
+    for i = 1, count do
+        local name = GetRaidRosterInfo(i)
+        if name and self:GetFullName(name) == sender then
+            return true
         end
-        return
     end
-    PP._lastFullSyncSent = now
+    return false
+end
+
+function PP:SendFullSync(guildKey, target)
+    -- Cooldown only applies to broadcasts; targeted whispers respond to a
+    -- specific request and must not be suppressed by an unrelated broadcast.
+    if not target then
+        local now = time()
+        if PP._lastFullSyncSent and (now - PP._lastFullSyncSent) < FULL_SYNC_COOLDOWN then
+            if PP._debug then
+                self:Print("[Sync] Full sync suppressed (cooldown)")
+            end
+            return
+        end
+        PP._lastFullSyncSent = now
+    end
     if PP._debug then
-        self:Print("[Sync] Full sync broadcast" .. (guildKey and (" [" .. guildKey .. "]") or " [all guilds]"))
+        local label = target and (" -> " .. self:GetShortName(target)) or " (broadcast)"
+        self:Print("[Sync] Full sync" .. label .. (guildKey and (" [" .. guildKey .. "]") or " [all guilds]"))
     end
     local guilds = {}
     if guildKey then
@@ -469,7 +460,7 @@ function PP:SendFullSync(guildKey)
         raidSettings = {
             autoPassEpicRolls = self.db.global.autoPassEpicRolls,
         },
-    })
+    }, target)
 end
 
 ---------------------------------------------------------------------------
@@ -481,15 +472,12 @@ end
 -- all online officers from whispering back simultaneously.
 function PP:HandleSyncRequest(sender, data)
     if not self:CanModify() then return end
-    local gk = (data and data.guildKey) or self:GetActiveGuildKey()
-    -- Only respond if the requester's guild matches ours
-    local myGuild = self:GetPlayerGuild()
-    if not myGuild or gk ~= myGuild then return end
+    -- Respond using OUR active guild key, not the requester's.  A joiner whose
+    -- _activeGuildKey is still stale (own guild instead of the raid leader's)
+    -- would otherwise be ignored by every officer in the raid.
+    local gk = self:GetActiveGuildKey()
     local gd = PP.Repo.Roster:GetData(gk)
-    if not gd then return end
-    -- Only respond when we have an active session — without one there is nothing
-    -- meaningful to restore and we avoid syncing roster data to non-members.
-    if not gd.activeSessionID then return end
+    if not gd or not gd.activeSessionID then return end
     local requesterVersion   = data and data.rosterVersion   or -1
     local requesterRaidItems = data and data.raidItemCount   or -1
     -- Count our own awarded items across all sessions
@@ -497,43 +485,52 @@ function PP:HandleSyncRequest(sender, data)
     for _, session in pairs(gd.sessions or {}) do
         myRaidItems = myRaidItems + #(session.items or {})
     end
-    -- Respond if roster OR raid-award records are behind.
-    -- Also respond if active session IDs differ — LEADER_LEFT ends sessions
-    -- without changing versions, so version parity alone is not enough to
-    -- detect that the requester needs a restore.
     local myActiveID        = gd.activeSessionID
     local requesterActiveID = data and data.activeSessionID
-    -- Only treat a session-ID mismatch as a sync trigger when we actually have
-    -- an active session to offer.  If we have no session, responding would just
-    -- send a large payload that can't help the requester restore anything.
     local sessionMismatch   = (myActiveID ~= requesterActiveID)
                            and (myActiveID ~= nil or requesterActiveID ~= nil)
                            and myActiveID ~= nil
+    -- Roster comparison only meaningful when requester referenced the same
+    -- guild key we're about to respond with.  Otherwise treat as not-synced.
+    local sameGuild = (data and data.guildKey == gk)
     local rosterSynced
-    if data and data.hash then
+    if sameGuild and data.hash then
         rosterSynced = (ComputeRosterHash(gd.roster) == data.hash)
-    else
+    elseif sameGuild then
         rosterSynced = (requesterVersion >= gd.rosterVersion)
+    else
+        rosterSynced = false
     end
     if rosterSynced and requesterRaidItems >= myRaidItems and not sessionMismatch then return end
-    -- Random jitter 0.3-1.5 s so multiple officers don't reply simultaneously
+    -- Random jitter 0.3-1.5 s so multiple officers don't reply simultaneously.
+    -- Whisper to the requester so the cooldown on broadcast SendFullSync cannot
+    -- swallow the reply.
     local delay = 0.3 + math.random() * 1.2
     self:ScheduleTimer(function()
-        self:SendFullSync(gk)
+        self:SendFullSync(gk, sender)
     end, delay)
 end
 
 -- Receive full sync data
-function PP:HandleSyncFull(data, sender)
+function PP:HandleSyncFull(data, sender, distribution)
     if not data or not data.guilds then return end
     -- Only accept data for guild keys we already know about or that match our
     -- own guild / active key.  This prevents foreign guild records from being
     -- auto-created in our database just because an officer has stale history.
-    local myGuild   = self:GetPlayerGuild()
-    local activeKey = self:GetActiveGuildKey()
+    -- Whispered SYNC_FULL is only trusted when (a) it arrived shortly after we
+    -- issued a RequestSync and (b) the sender is in our current group. Without
+    -- both, an unsolicited whisper from anyone running the addon could inject
+    -- arbitrary guild keys into the local DB.
+    local myGuild      = self:GetPlayerGuild()
+    local activeKey    = self:GetActiveGuildKey()
+    local recentReq    = PP._lastSyncRequestSent
+                          and (time() - PP._lastSyncRequestSent) <= SYNC_REQUEST_TRUST_WINDOW
+    local trustForeign = (distribution == "WHISPER")
+                          and recentReq
+                          and self:_isSenderInGroup(sender)
     for gk, incoming in pairs(data.guilds) do
-        -- Skip keys that are wholly foreign to this client
-        if gk ~= myGuild and gk ~= activeKey and not self.db.global.guilds[gk] then
+        -- Skip keys that are wholly foreign to this client (broadcast only)
+        if gk ~= myGuild and gk ~= activeKey and not self.db.global.guilds[gk] and not trustForeign then
             -- (do nothing – ignore this guild's data entirely)
         else
             local local_gd = PP.Repo.Roster:EnsureData(gk)
@@ -611,6 +608,13 @@ function PP:HandleSyncFull(data, sender)
                 if IsInRaid() and gk == activeKey then
                     PP.Session:CheckLeaderPresent()
                 end
+            elseif incoming.activeSessionID == nil
+                   and incomingSessionVer > localSessionVer
+                   and local_gd.activeSessionID then
+                -- Sender authoritatively cleared their active session at a
+                -- newer version than ours; end our stale local session too.
+                PP.Session:End(PP.SESSION_END.SYNC_FULL, local_gd.activeSessionID, gk)
+                local_gd.activeSessionVersion = incomingSessionVer
             end
         end
     end
@@ -648,7 +652,13 @@ function PP:HandleRosterDelta(data, sender)
     if not data or not data.guildKey then return end
     local gd = PP.Repo.Roster:GetData(data.guildKey)
     if not gd then return end
-    if not (data.version and data.version > gd.rosterVersion) then return end
+    if not data.version then return end
+    if data.version <= gd.rosterVersion then return end
+    -- Require sequential application; a gap means we missed a delta — fall back to full sync
+    if data.version ~= gd.rosterVersion + 1 then
+        self:ScheduleTimer(function() self:RequestSync() end, math.random())
+        return
+    end
     if data.changed then
         for fullName, entry in pairs(data.changed) do
             gd.roster[fullName] = entry
@@ -770,6 +780,7 @@ function PP:HandleSessionDelete(data, sender)
     if data.version and data.version <= gd.rosterVersion then return end
 
     gd.sessions[data.raidID] = nil
+    if gd.sessionSnapshots then gd.sessionSnapshots[data.raidID] = nil end
     gd.rosterVersion = data.version
 
     -- Record tombstone so this deletion propagates to offline peers via future syncs
@@ -784,6 +795,10 @@ function PP:HandleSessionDelete(data, sender)
     if self._raidDetailWindow then
         self._raidDetailWindow:Release()
         self._raidDetailWindow = nil
+    end
+    if self._snapshotWindow then
+        self._snapshotWindow:Release()
+        self._snapshotWindow = nil
     end
 
     self:Print("A session record was deleted by an officer.")
@@ -803,6 +818,12 @@ function PP:HandleSessionClose(data, sender)
     end
     if gd.activeSessionID == data.raidID then
         PP.Session:End(PP.SESSION_END.SYNC_RECEIVED, data.raidID, gk)
+    end
+    -- Apply snapshot last so our own End() (which captures a local snapshot at
+    -- our current rosterVersion) cannot overwrite the officer's broadcast copy
+    -- if theirs is newer. SetSessionSnapshot already arbitrates by version.
+    if data.snapshot then
+        PP.Repo.Roster:SetSessionSnapshot(gk, data.raidID, data.snapshot)
     end
     self:RefreshMainWindow()
 end
@@ -862,23 +883,33 @@ function PP:HandleLootAward(data, sender)
         if PP._seenAckIds[key] then return end
         PP._seenAckIds[key] = true
     end
-    -- Record item in raid history for all clients
+    -- Record item in raid history for all clients.  Use the guildKey from the
+    -- award payload so receivers with a stale _activeGuildKey still write the
+    -- item into the correct session.
     if data.itemLink and data.awardedTo then
-        PP.Session:RecordItemAward(data.itemLink, data.itemID, data.awardedTo, data.pointsSpent, data.response, data.key)
+        PP.Session:RecordItemAward(data.itemLink, data.itemID, data.awardedTo, data.pointsSpent, data.response, data.key, data.guildKey)
     end
     -- Apply score deduction to the winner
-    if data.awardedTo then
-        local roster = PP.Repo.Roster:GetRoster()
+    if data.awardedTo and data.newScore ~= nil then
+        local roster = PP.Repo.Roster:GetRoster(data.guildKey)
         if roster[data.awardedTo] then
-            if data.newScore ~= nil then
-                roster[data.awardedTo].score = data.newScore
-            elseif data.response == PP.RESPONSE.TRANSMOG then
-                roster[data.awardedTo].score = math.max(0, (roster[data.awardedTo].score or 0) - 1)
-            elseif data.response == PP.RESPONSE.MINOR then
-                -- Recompute minor-upgrade target from local roster view
-                roster[data.awardedTo].score = PP:GetMinorUpgradeScore(data.awardedTo)
-            else
-                roster[data.awardedTo].score = 0
+            roster[data.awardedTo].score = data.newScore
+        end
+    end
+    -- Advance local rosterVersion to match the loot master and verify hash.
+    -- No separate ROSTER_DELTA is sent for awards — the version and hash travel
+    -- in the LOOT_AWARD payload so receivers stay in sync with one message.
+    if data.rosterVersion and data.guildKey then
+        local gd = PP.Repo.Roster:GetData(data.guildKey)
+        if gd then
+            if data.rosterVersion > gd.rosterVersion + 1 then
+                -- Gap: missed prior delta(s). Don't bump version; full sync will fix it.
+                self:ScheduleTimer(function() self:RequestSync() end, math.random())
+            elseif data.rosterVersion == gd.rosterVersion + 1 then
+                gd.rosterVersion = data.rosterVersion
+                if data.rosterHash and ComputeRosterHash(gd.roster) ~= data.rosterHash then
+                    self:ScheduleTimer(function() self:RequestSync() end, math.random())
+                end
             end
         end
     end
@@ -1002,14 +1033,114 @@ function PP:HandleLootCancel(data, sender)
     self:RefreshLootResponseFrame()
 end
 
--- Raid leader signalled that all loot is distributed: wipe local pending state
-function PP:HandleLootClear(sender)
-    if next(PP.Repo.Loot:GetAll()) == nil then return end
-    for key in pairs(PP.Repo.Loot:GetAll()) do
-        PP._completedLootKeys[key] = true
+---------------------------------------------------------------------------
+-- Roster snapshot fetch (user-triggered backfill)
+--
+-- Snapshots are NOT shipped in SYNC_FULL. They are exchanged inline on
+-- SESSION_CLOSE for online recipients, captured locally on every End() for
+-- everyone else, and backfilled via this BULK request/reply pair when the
+-- user clicks "Fetch Session Snapshots" under Settings.
+--
+-- The request advertises every (sessionID, localRosterVersion) tuple the
+-- requester knows about. Responders return any snapshot whose locally-stored
+-- rosterVersion exceeds the requester's. Arbitration on the requesting client
+-- is the same SetSessionSnapshot version check used everywhere else.
+---------------------------------------------------------------------------
+local SNAPSHOT_FETCH_COOLDOWN = 5  -- seconds between user-triggered fetches
+
+function PP:RequestSessionSnapshots()
+    if not IsInGroup() then
+        self:Print("You must be in a group to fetch session snapshots.")
+        return
     end
-    PP.Repo.Loot:WipeAll()
-    self:CloseLootPopups()
-    self:RefreshLootMasterWindow()
-    self:RefreshLootResponseFrame()
+    local now = time()
+    if PP._lastSnapshotFetchSent and (now - PP._lastSnapshotFetchSent) < SNAPSHOT_FETCH_COOLDOWN then
+        self:Print("Snapshot fetch already in progress.")
+        return
+    end
+    PP._lastSnapshotFetchSent = now
+
+    local gk = self:GetActiveGuildKey()
+    local versions = PP.Repo.Roster:GetAllSnapshotVersions(gk)
+    PP._snapshotFetchAppliedCount = 0
+    self:SendAddonMessage(PP.MSG.SNAPSHOT_REQUEST, {
+        guildKey = gk,
+        versions = versions,
+    })
+    if PP._debug then
+        local nSessions = 0
+        for _ in pairs(versions) do nSessions = nSessions + 1 end
+        self:Print("[Sync] Snapshot fetch requested for " .. nSessions .. " session(s)")
+    end
+    self:Print("Fetching session snapshots from group...")
 end
+
+function PP:HandleSnapshotRequest(sender, data, distribution)
+    if not data or not data.guildKey then return end
+    -- Only respond to group-channel requests, or whispers from current group
+    -- members. Prevents a stranger's whisper from harvesting session data.
+    local trusted = (distribution == "RAID" or distribution == "PARTY")
+                     or ((distribution == "WHISPER") and self:_isSenderInGroup(sender))
+    if not trusted then return end
+
+    local gd = PP.Repo.Roster:GetData(data.guildKey)
+    if not gd or not gd.sessionSnapshots then return end
+
+    local snapshots = {}
+    local count = 0
+    local requesterVersions = data.versions or {}
+    -- Iterate the requester's advertised versions only — never volunteer
+    -- snapshots for sessionIDs they did not ask about.
+    for sessionID, theirVer in pairs(requesterVersions) do
+        local snap = gd.sessionSnapshots[sessionID]
+        if snap then
+            local mineVer = snap.rosterVersion or 0
+            if mineVer > (theirVer or -1) then
+                snapshots[sessionID] = snap
+                count = count + 1
+            end
+        end
+    end
+    if count == 0 then return end
+
+    -- Random jitter so multiple peers don't reply at exactly the same instant.
+    local delay = 0.2 + math.random() * 0.8
+    self:ScheduleTimer(function()
+        self:SendAddonMessage(PP.MSG.SNAPSHOT_REPLY, {
+            guildKey  = data.guildKey,
+            snapshots = snapshots,
+        }, sender)
+        if PP._debug then
+            self:Print("[Sync] Snapshot reply -> " .. self:GetShortName(sender) .. " (" .. count .. " snapshot(s))")
+        end
+    end, delay)
+end
+
+function PP:HandleSnapshotReply(data, sender, distribution)
+    if not data or not data.guildKey or not data.snapshots then return end
+    -- Only accept replies from group members in response to our own request.
+    -- Untrusted whispers could otherwise inject high-rosterVersion entries
+    -- that would override legitimate snapshots via SetSessionSnapshot.
+    if not PP._lastSnapshotFetchSent then return end
+    local trusted = (distribution == "RAID" or distribution == "PARTY")
+                     or ((distribution == "WHISPER") and self:_isSenderInGroup(sender))
+    if not trusted then return end
+    local applied = 0
+    for sessionID, snap in pairs(data.snapshots) do
+        if PP.Repo.Roster:SetSessionSnapshot(data.guildKey, sessionID, snap) then
+            applied = applied + 1
+        end
+    end
+    PP._snapshotFetchAppliedCount = (PP._snapshotFetchAppliedCount or 0) + applied
+    if PP._debug then
+        self:Print("[Sync] Snapshot reply from " .. self:GetShortName(sender)
+            .. ": applied " .. applied .. " / " .. (function()
+                local n = 0; for _ in pairs(data.snapshots) do n = n + 1 end; return n
+            end)())
+    end
+    if applied > 0 then
+        self:Print("Received " .. applied .. " session snapshot(s) from " .. self:GetShortName(sender) .. ".")
+        self:RefreshMainWindow()
+    end
+end
+

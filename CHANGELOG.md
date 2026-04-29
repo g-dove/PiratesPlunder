@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.5.1] - 2026-04-28
+### Added
+- Roster snapshots: end-of-session standings frozen per session. Captured locally by every client on `PP.Session:End()` (skipped for `RESET` and `SYNC_DELETE`); shipped inline on `SESSION_CLOSE`; backfilled on demand via `SNAPSHOT_REQUEST` / `SNAPSHOT_REPLY` (BULK priority). `sessionSnapshots` table added to `guilds[guildKey]` schema (auto-backfilled by `EnsureData`). Arbitration by `rosterVersion` — newest wins.
+- New `PP.Repo.Roster` methods: `GetSessionSnapshot`, `SetSessionSnapshot`, `BuildRosterSnapshot`, `GetAllSnapshotVersions`.
+- Roster snapshot UI: "View Roster Snapshot" button on ended-session detail view; popup window lists frozen standings sorted by score. "Fetch Session Snapshots" button in the Settings tab triggers a group-wide backfill (5 s cooldown).
+- `LOOT_CLEAR` message type: raid leader broadcasts after 60 s of an empty queue. Receivers wipe their loot display and mark the cleared keys as completed so late `LOOT_POST` messages cannot re-pop them. Idle timer cancels on new posts and on session end/create.
+- `PP:LocalClearLoot()` and `/pp loot clear` (`/pp l clear`): wipes pending loot for this client only, no broadcast. Settings tab gains a "Clear My Loot Display" button.
+- `PARTY_LEADER_CHANGED` handler (`OnPartyLeaderChanged`): hands off the idle-clear timer when leadership transfers.
+- Bounded post-join sync retry (`_ScheduleJoinSync`): up to 3 attempts (3 s, then 9 s, then 15 s) issuing `RequestSync`; stops once an active session is adopted, the group is left, or no other PP users are present.
+- `_completedLootKeys` runtime table tracks cleared/awarded/cancelled loot keys to suppress late re-posts.
+
+### Changed
+- Reliable broadcast simplified: per-member whisper retry loop removed. `BroadcastCritical` now broadcasts once and relies on the `ACK` hash check to detect divergence — any mismatch schedules a single `SendFullSync`. `_criticalAckSnapshots` entries auto-expire after 30 s.
+- Message priority dropped from `ALERT` to `NORMAL` for loot/session/sync traffic. `LOOT_STATE_QUERY`, `RAID_SETTINGS`, and the new `SNAPSHOT_*` messages remain at `BULK`.
+- `LOOT_AWARD` payload now carries `rosterVersion` and `rosterHash` — receivers update score, advance `rosterVersion`, and verify the hash from a single message. Separate `ROSTER_DELTA` on award removed; gap detection requests a full sync.
+- `ROSTER_DELTA` requires sequential version application; any gap (`incoming != local + 1`) triggers `RequestSync`.
+- `LOOT_CANCEL` payload now includes `guildKey` so the ACK hash compares against the same roster on every client.
+- `BroadcastSessionCreate` payload reduced to `{name, startTime}` — recipients reconstruct the session shell locally.
+- `HandleSyncRequest` responds using the responder's own active guild key (no longer filters by requester guild match) so a joining player with a stale `_activeGuildKey` is not ignored by every officer.
+- `SendFullSync(guildKey, target)`: targeted whispers bypass the broadcast cooldown.
+- `HandleSyncFull` only auto-creates foreign guild records when the message is a whispered reply received within 15 s of our own `RequestSync` and the sender is currently in our group.
+- `HandleSyncFull` ends a local stale session when the sender authoritatively cleared theirs at a newer `activeSessionVersion`.
+- `PP.Session:RecordItemAward` accepts an optional `guildKey` parameter; `HandleLootAward` passes the payload's `guildKey` so receivers with a stale `_activeGuildKey` still write into the correct session.
+- Default session names: when multiple sessions are created on the same day they auto-increment as `Session YYYY-MM-DD #2`, `#3`, …
+- `HandleSessionCreate` rebuilds the session shell from the trimmed payload and routes via `PP.Repo.Roster:SetActiveSessionID`.
+
+### Fixed
+- Whisper-only `SYNC_FULL` and `SNAPSHOT_REPLY` no longer accepted from non-group senders or outside their request trust window — prevents arbitrary guild-key injection and snapshot-poisoning via unsolicited whispers.
+- `LOOT_CLEAR` validated as raid-leader-only; pending keys are marked completed before the local wipe so a delayed `LOOT_POST` cannot re-introduce a cleared item.
+- Snapshot pop-up window released on `SESSION_DELETE` so it cannot reference a deleted session.
+
 ## [0.5.0] - 2026-04-22
 ### Added
 - Reliable broadcast (`BroadcastCritical`): initial RAID/PARTY broadcast + per-member whisper retry for critical messages (LOOT_POST, LOOT_AWARD, LOOT_CANCEL, SESSION_CREATE, SESSION_CLOSE, SESSION_DELETE, ROSTER_DELTA, GROUP_SCORE). Retries 3× with 4s delay before giving up.

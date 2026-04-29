@@ -38,12 +38,28 @@ function PP.Session:End(reason, sessionID, guildKey)
     PP.Repo.Loot:WipeAll()
     PP:CloseLootPopups()
 
+    -- Capture a roster snapshot tagged with the current rosterVersion. Every
+    -- client that runs End() locally writes its own snapshot; rosterVersion
+    -- arbitration in SetSessionSnapshot keeps the highest-version copy.
+    -- RESET wipes data deliberately; SYNC_DELETE arrives after the session
+    -- and its snapshot have already been removed, so capturing here would
+    -- resurrect a snapshot for a deleted session.
+    local capturedSnapshot
+    local skipSnapshot = (reason == PP.SESSION_END.RESET)
+                          or (reason == PP.SESSION_END.SYNC_DELETE)
+    if not skipSnapshot then
+        capturedSnapshot = PP.Repo.Roster:BuildRosterSnapshot(guildKey)
+        if capturedSnapshot then
+            PP.Repo.Roster:SetSessionSnapshot(guildKey, sessionID, capturedSnapshot)
+        end
+    end
+
     -- Reason-specific messaging
     if reason == PP.SESSION_END.OFFICER_ACTION then
         local gd2 = PP.Repo.Roster:GetData(guildKey)
         local session = gd2 and gd2.sessions and gd2.sessions[sessionID]
         PP:Print("Session ended: " .. (session and session.name or sessionID))
-        PP:BroadcastSessionClose(sessionID)
+        PP:BroadcastSessionClose(sessionID, capturedSnapshot)
     elseif reason == PP.SESSION_END.LEFT_GROUP then
         local me = PP:GetPlayerFullName()
         local gd2 = PP.Repo.Roster:GetData(guildKey)
@@ -159,6 +175,7 @@ function PP.Session:Delete(raidID)
     end
 
     gd.sessions[raidID] = nil
+    if gd.sessionSnapshots then gd.sessionSnapshots[raidID] = nil end
     PP.Repo.Roster:BumpRosterVersion(gk)  -- version bump so peers accept the delete
 
     -- Write tombstone so full-syncs propagate the deletion to offline peers
@@ -170,6 +187,10 @@ function PP.Session:Delete(raidID)
     if PP._raidDetailWindow then
         PP._raidDetailWindow:Release()
         PP._raidDetailWindow = nil
+    end
+    if PP._snapshotWindow then
+        PP._snapshotWindow:Release()
+        PP._snapshotWindow = nil
     end
 
     PP:RefreshMainWindow()
@@ -282,11 +303,21 @@ function PP.Session:AddBoss(encounterID, encounterName)
 end
 
 ---------------------------------------------------------------------------
--- RecordItemAward(itemLink, itemID, awardedTo, pointsSpent, response, lootKey)
--- Moved from PP:RecordItemAward() in Raid.lua.
+-- RecordItemAward(itemLink, itemID, awardedTo, pointsSpent, response, lootKey, guildKey)
+-- guildKey is optional; when supplied (e.g. from a LOOT_AWARD payload) we
+-- look up that guild's active session directly rather than relying on the
+-- receiver's _activeGuildKey, which may be stale during the join handshake.
 ---------------------------------------------------------------------------
-function PP.Session:RecordItemAward(itemLink, itemID, awardedTo, pointsSpent, response, lootKey)
-    local session = PP.Repo.Roster:GetActiveSession()
+function PP.Session:RecordItemAward(itemLink, itemID, awardedTo, pointsSpent, response, lootKey, guildKey)
+    local session
+    if guildKey then
+        local gd = PP.Repo.Roster:GetData(guildKey)
+        if gd and gd.activeSessionID then
+            session = gd.sessions[gd.activeSessionID]
+        end
+    else
+        session = PP.Repo.Roster:GetActiveSession()
+    end
     if not session then return end
     session.items[#session.items + 1] = {
         itemLink    = itemLink,
@@ -295,6 +326,6 @@ function PP.Session:RecordItemAward(itemLink, itemID, awardedTo, pointsSpent, re
         pointsSpent = pointsSpent or 0,
         response    = response or PP.RESPONSE.NEED,
         time        = time(),
-        key         = lootKey,  -- loot key for LOOT_STATE_QUERY matching
+        key         = lootKey,
     }
 end

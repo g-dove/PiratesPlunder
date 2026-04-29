@@ -39,7 +39,12 @@ function PP.Repo.Roster:EnsureData(guildKey)
             activeSessionID       = nil,
             activeSessionVersion  = 0,
             deletedSessions       = {},
+            sessionSnapshots      = {},
         }
+    end
+    -- Backfill for guild records created before sessionSnapshots existed
+    if not PP.db.global.guilds[guildKey].sessionSnapshots then
+        PP.db.global.guilds[guildKey].sessionSnapshots = {}
     end
     return PP.db.global.guilds[guildKey]
 end
@@ -139,6 +144,73 @@ function PP.Repo.Roster:AddTombstone(gk, id, ver)
     if not gd then return end
     if not gd.deletedSessions then gd.deletedSessions = {} end
     gd.deletedSessions[id] = ver
+end
+
+---------------------------------------------------------------------------
+-- GetSessionSnapshot(gk, sessionID)
+---------------------------------------------------------------------------
+function PP.Repo.Roster:GetSessionSnapshot(gk, sessionID)
+    local gd = self:GetData(gk)
+    if not gd or not gd.sessionSnapshots then return nil end
+    return gd.sessionSnapshots[sessionID]
+end
+
+---------------------------------------------------------------------------
+-- SetSessionSnapshot(gk, sessionID, snapshot)
+-- Apply only if incoming rosterVersion is newer than what we have.
+-- Returns true when the snapshot was stored.
+---------------------------------------------------------------------------
+function PP.Repo.Roster:SetSessionSnapshot(gk, sessionID, snapshot)
+    if not sessionID or not snapshot then return false end
+    local gd = self:EnsureData(gk)
+    if not gd then return false end
+    local existing = gd.sessionSnapshots[sessionID]
+    local existingVer = existing and existing.rosterVersion or -1
+    local incomingVer = snapshot.rosterVersion or -1
+    if incomingVer <= existingVer then return false end
+    gd.sessionSnapshots[sessionID] = snapshot
+    return true
+end
+
+---------------------------------------------------------------------------
+-- BuildRosterSnapshot(gk)
+-- Deep-copies the current roster into a snapshot record tagged with the
+-- current roster version. Returns nil for unknown / sandbox guilds.
+---------------------------------------------------------------------------
+function PP.Repo.Roster:BuildRosterSnapshot(gk)
+    if PP._sandbox or gk == "__sandbox__" then return nil end
+    local gd = self:GetData(gk)
+    if not gd then return nil end
+    local entries = {}
+    for fullName, data in pairs(gd.roster or {}) do
+        entries[fullName] = {
+            name  = data.name,
+            realm = data.realm,
+            score = data.score,
+        }
+    end
+    return {
+        capturedAt    = time(),
+        rosterVersion = gd.rosterVersion or 0,
+        entries       = entries,
+    }
+end
+
+---------------------------------------------------------------------------
+-- GetAllSnapshotVersions(gk)
+-- Returns { [sessionID] = rosterVersion } for every snapshot stored under gk,
+-- including 0 for sessions that exist locally but lack a snapshot. Used to
+-- build SNAPSHOT_REQUEST payloads.
+---------------------------------------------------------------------------
+function PP.Repo.Roster:GetAllSnapshotVersions(gk)
+    local gd = self:GetData(gk)
+    if not gd then return {} end
+    local versions = {}
+    for sessionID in pairs(gd.sessions or {}) do
+        local snap = gd.sessionSnapshots and gd.sessionSnapshots[sessionID]
+        versions[sessionID] = snap and snap.rosterVersion or 0
+    end
+    return versions
 end
 
 ---------------------------------------------------------------------------
