@@ -199,14 +199,21 @@ end
 -- Version check handlers
 ---------------------------------------------------------------------------
 
--- Received a version-check broadcast: reply with our own version via whisper.
+-- Received a version-check broadcast: reply with our own version via the
+-- group channel so every PP user updates their cached version for `sender`.
+-- This keeps everyone's prepopulated list current when someone updates
+-- mid-raid and someone else opens the version-check window.
 function PP:HandleVersionRequest(sender)
-    self:SendAddonMessage(PP.MSG.VERSION_REPLY, { version = PP.VERSION }, sender)
+    self:SendAddonMessage(PP.MSG.VERSION_REPLY, { version = PP.VERSION })
 end
 
--- Received a version reply: update the open version-check window if any.
+-- Received a version reply (broadcast or whisper): cache it and update the
+-- open version-check window if any. The cache is also populated by the
+-- on-join VERSION_REPLY announcement so the window can prepopulate.
 function PP:HandleVersionReply(data, sender)
     if not data or not data.version then return end
+    PP._versionCheckData = PP._versionCheckData or {}
+    PP._versionCheckData[sender] = tostring(data.version)
     self:UpdateVersionCheckWindow(sender, tostring(data.version))
 end
 

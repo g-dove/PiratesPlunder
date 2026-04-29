@@ -29,8 +29,9 @@ end
 ---------------------------------------------------------------------------
 
 function PP:ShowVersionCheckWindow()
-    -- Reset collected data and (re)open the window
-    PP._versionCheckData = {}
+    -- Preserve the running cache populated by on-join announcements and any
+    -- prior replies, so the window opens with whatever we already know.
+    PP._versionCheckData = PP._versionCheckData or {}
 
     -- Record local player immediately
     local me = self:GetPlayerFullName()
@@ -61,16 +62,13 @@ function PP:ShowVersionCheckWindow()
     f:AddChild(scroll)
     PP._versionCheckScroll = scroll
 
-    -- Broadcast to raid / party; everyone whispers back
+    -- Render whatever we already have cached from on-join announcements.
+    PP:DrawVersionList()
+
+    -- Broadcast a request so every PP user re-broadcasts their version,
+    -- refreshing the cache for anyone who updated mid-raid.
     if IsInGroup() and not self._sandbox then
         self:SendAddonMessage(PP.MSG.VERSION_REQUEST, {})
-        local waitLbl = AceGUI:Create("Label")
-        waitLbl:SetFullWidth(true)
-        waitLbl:SetText("|cFFAAAAAA  Waiting for responses…|r")
-        scroll:AddChild(waitLbl)
-    else
-        -- Not in a group — just show own version
-        PP:DrawVersionList()
     end
 end
 

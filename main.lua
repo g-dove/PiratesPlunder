@@ -635,7 +635,9 @@ function PiratesPlunder:_ScheduleJoinSync(attempt)
     self:ScheduleTimer(function()
         if not IsInGroup() then return end
         if attempt == 1 then
-            self:SendAddonMessage(PP.MSG.VERSION_REQUEST, {})
+            -- Announce our own version (no request). Other PP users cache
+            -- it for the version-check window's prepopulated list.
+            self:SendAddonMessage(PP.MSG.VERSION_REPLY, { version = PP.VERSION })
         end
         self:RequestSync()
         self:ScheduleTimer(function()
@@ -660,6 +662,7 @@ function PiratesPlunder:OnGroupRosterUpdate()
 
     if not nowInGroup then
         PP._ppUsers = nil
+        PP._versionCheckData = nil
     end
 
     -- If a deferred session-end is pending and we are still in a group, cancel it
