@@ -47,14 +47,13 @@ local MSG_PRIORITY = {
     [PP.MSG.SESSION_CLOSE]    = "NORMAL",
     -- Sync / informational
     [PP.MSG.ACK]              = "NORMAL",
-    [PP.MSG.ROSTER_DELTA]     = "NORMAL",
     [PP.MSG.GROUP_SCORE]      = "NORMAL",
     [PP.MSG.GROUP_SCORE_ACK]  = "NORMAL",
     [PP.MSG.SYNC_REQUEST]     = "NORMAL",
     [PP.MSG.VERSION_REQUEST]  = "NORMAL",
     [PP.MSG.VERSION_REPLY]    = "NORMAL",
     -- Large payloads / background recovery
-    [PP.MSG.LOOT_STATE_QUERY] = "BULK",
+    [PP.MSG.LOOT_STATE_QUERY] = "NORMAL",
     [PP.MSG.RAID_SETTINGS]    = "BULK",
     -- Snapshot fetch is user-triggered backfill; ship at BULK so it never
     -- competes with realtime loot/session traffic.
@@ -63,8 +62,21 @@ local MSG_PRIORITY = {
 }
 
 ---------------------------------------------------------------------------
--- Send a structured message to the raid / party
+-- Send a structured message to the raid / party.
+--
+-- Every payload is prefixed with a high-precision salt as the FIRST
+-- serialized value so two consecutive messages of the same type never share
+-- their leading bytes. WoW's addon-message pipeline (and ChatThrottleLib's
+-- coalescing) can suppress what looks like a duplicate send when the
+-- prefix bytes match a recent message; varying salt defeats this.
+-- Receivers strip the salt in OnCommReceived.
 ---------------------------------------------------------------------------
+local _saltCounter = 0
+local function newSalt()
+    _saltCounter = (_saltCounter + 1) % 0x100000
+    return string.format("%x:%x:%x", time(), math.floor(GetTime() * 1000) % 0x100000, _saltCounter)
+end
+
 function PP:SendAddonMessage(msgType, data, target)
     if self._sandbox then return end
     if type(data) == "table" and data._ackId then
@@ -80,7 +92,7 @@ function PP:SendAddonMessage(msgType, data, target)
             end, 30)
         end
     end
-    local payload = self:Serialize(msgType, data)
+    local payload = self:Serialize(newSalt(), msgType, data)
     local prio    = MSG_PRIORITY[msgType] or "NORMAL"
     if target then
         self:SendCommMessage(PP.COMM_PREFIX, payload, "WHISPER", target, prio)
@@ -97,8 +109,17 @@ end
 function PP:OnCommReceived(prefix, message, distribution, sender)
     if prefix ~= PP.COMM_PREFIX then return end
 
-    local success, msgType, data = self:Deserialize(message)
+    -- New senders prefix payload with a salt to defeat first-byte dedupe.
+    -- 3-arg shape = (salt, msgType, data); legacy 2-arg shape = (msgType, data).
+    -- Disambiguate by presence of the third value.
+    local success, first, second, third = self:Deserialize(message)
     if not success then return end
+    local msgType, data
+    if third ~= nil then
+        msgType, data = second, third
+    else
+        msgType, data = first, second
+    end
 
     -- Ignore our own messages
     local me = self:GetPlayerFullName()
@@ -175,9 +196,6 @@ function PP:OnCommReceived(prefix, message, distribution, sender)
     elseif msgType == PP.MSG.VERSION_REPLY then
         self:HandleVersionReply(data, sender)
 
-    elseif msgType == PP.MSG.ROSTER_DELTA then
-        self:HandleRosterDelta(data, sender)
-
     elseif msgType == PP.MSG.GROUP_SCORE then
         self:HandleGroupScore(data, sender)
 
@@ -219,6 +237,7 @@ end
 
 function PP:BroadcastRaidSettings()
     if not IsInGroup() then return end
+    if not self:IsRaidLeader() then return end
     self:SendAddonMessage(PP.MSG.RAID_SETTINGS, {
         autoPassEpicRolls = self.db.global.autoPassEpicRolls,
     })
@@ -230,9 +249,14 @@ end
 -- sync — no per-member whisper retries (WoW's RAID/PARTY channel is
 -- reliable for online members; offline/loading clients recover via
 -- RequestSync on reconnect).
+--
+-- Raid leader is the single source of truth for all authoritative state
+-- (roster mutations, loot lifecycle, session lifecycle). Officers and
+-- assists never push data to the raid; they only observe and respond.
 ---------------------------------------------------------------------------
 function PP:BroadcastCritical(msgType, data)
     if self._sandbox or not IsInGroup() then return end
+    if not self:IsRaidLeader() then return end
     local id = newAckId()
     data._ackId = id
     self:SendAddonMessage(msgType, data)
@@ -308,6 +332,7 @@ end
 
 function PP:BroadcastRoster()
     if not IsInGroup() then return end
+    if not self:IsRaidLeader() then return end
     local gk = self:GetActiveGuildKey()
     local gd = PP.Repo.Roster:GetData(gk)
     if not gd then return end
@@ -322,27 +347,9 @@ function PP:BroadcastRoster()
     })
 end
 
-function PP:BroadcastRosterDelta(changed, removed)
-    if not IsInGroup() then return end
-    local gk = self:GetActiveGuildKey()
-    local gd = PP.Repo.Roster:GetData(gk)
-    if not gd then return end
-    if PP._debug then
-        local nc = changed and (function() local n=0; for _ in pairs(changed) do n=n+1 end; return n end)() or 0
-        local nr = removed and #removed or 0
-        self:Print("[Sync] Delta broadcast sent (v" .. gd.rosterVersion .. "): " .. nc .. " changed, " .. nr .. " removed")
-    end
-    self:SendAddonMessage(PP.MSG.ROSTER_DELTA, {
-        changed  = changed,
-        removed  = removed,
-        version  = gd.rosterVersion,
-        hash     = ComputeRosterHash(gd.roster),
-        guildKey = gk,
-    })
-end
-
 function PP:BroadcastGroupScore(amount)
     if not IsInGroup() then return end
+    if not self:IsRaidLeader() then return end
     local gk = self:GetActiveGuildKey()
     local gd = PP.Repo.Roster:GetData(gk)
     if not gd then return end
@@ -437,6 +444,9 @@ function PP:_isSenderInGroup(sender)
 end
 
 function PP:SendFullSync(guildKey, target)
+    -- Only the raid leader is the source of truth, so only the leader pushes
+    -- a full sync to the raid (whether broadcast or whisper-targeted).
+    if IsInGroup() and not self:IsRaidLeader() then return end
     -- Cooldown only applies to broadcasts; targeted whispers respond to a
     -- specific request and must not be suppressed by an unrelated broadcast.
     if not target then
@@ -478,7 +488,9 @@ end
 -- have a higher version than the requester. A small random jitter prevents
 -- all online officers from whispering back simultaneously.
 function PP:HandleSyncRequest(sender, data)
-    if not self:CanModify() then return end
+    -- Only the raid leader replies. Stops officers and assists from racing
+    -- to whisper back overlapping (and possibly stale) full syncs.
+    if not self:IsRaidLeader() then return end
     -- Respond using OUR active guild key, not the requester's.  A joiner whose
     -- _activeGuildKey is still stale (own guild instead of the raid leader's)
     -- would otherwise be ignored by every officer in the raid.
@@ -653,39 +665,6 @@ function PP:HandleRosterUpdate(data, sender)
         end
         self:RefreshMainWindow()
     end
-end
-
-function PP:HandleRosterDelta(data, sender)
-    if not data or not data.guildKey then return end
-    local gd = PP.Repo.Roster:GetData(data.guildKey)
-    if not gd then return end
-    if not data.version then return end
-    if data.version <= gd.rosterVersion then return end
-    -- Require sequential application; a gap means we missed a delta — fall back to full sync
-    if data.version ~= gd.rosterVersion + 1 then
-        self:ScheduleTimer(function() self:RequestSync() end, math.random())
-        return
-    end
-    if data.changed then
-        for fullName, entry in pairs(data.changed) do
-            gd.roster[fullName] = entry
-        end
-    end
-    if data.removed then
-        for _, fullName in ipairs(data.removed) do
-            gd.roster[fullName] = nil
-        end
-    end
-    gd.rosterVersion = data.version
-    local match = not data.hash or ComputeRosterHash(gd.roster) == data.hash
-    if PP._debug then
-        local label = match and "|cFF00FF00match \226\156\147|r" or "|cFFFF4400MISMATCH \226\156\151|r"
-        self:Print("[Sync] Delta from " .. self:GetShortName(sender) .. " (v" .. data.version .. "): hash " .. label)
-    end
-    if not match then
-        self:ScheduleTimer(function() self:RequestSync() end, math.random())
-    end
-    self:RefreshMainWindow()
 end
 
 function PP:HandleGroupScore(data, sender)
@@ -904,8 +883,9 @@ function PP:HandleLootAward(data, sender)
         end
     end
     -- Advance local rosterVersion to match the loot master and verify hash.
-    -- No separate ROSTER_DELTA is sent for awards — the version and hash travel
-    -- in the LOOT_AWARD payload so receivers stay in sync with one message.
+    -- Version + hash travel inline on LOOT_AWARD so a single message keeps
+    -- receivers in sync. A version gap or hash mismatch triggers RequestSync
+    -- which the leader answers with a full roster broadcast.
     if data.rosterVersion and data.guildKey then
         local gd = PP.Repo.Roster:GetData(data.guildKey)
         if gd then

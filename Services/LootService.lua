@@ -154,6 +154,7 @@ function PP.Loot:Post(itemLink)
         itemID        = itemID,
         postedBy      = PP:GetPlayerFullName(),
         allowTransmog = PP.db.global.allowTransmogRolls ~= false,
+        guildKey      = PP:GetActiveGuildKey(),
     })
 
     -- Also show the unified response popup (adds this item to it)
@@ -244,7 +245,8 @@ function PP.Loot:Award(key, fullName, free)
     )
 
     -- Single broadcast carries score change + roster version/hash so receivers
-    -- can update scores and verify sync without a separate ROSTER_DELTA message.
+    -- can update scores and verify sync inline; mismatch falls back to a full
+    -- roster broadcast from the leader.
     local gk         = PP:GetActiveGuildKey()
     local rosterVer  = PP.Repo.Roster:GetRosterVersion(gk)
     local rosterHash = PP.ComputeRosterHash and PP.ComputeRosterHash(PP.Repo.Roster:GetRoster(gk)) or nil

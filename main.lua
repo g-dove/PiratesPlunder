@@ -44,7 +44,6 @@ PiratesPlunder.MSG = {
     VERSION_REQUEST   = "VER_REQ",
     VERSION_REPLY     = "VER_REP",
     ACK               = "ACK",
-    ROSTER_DELTA      = "ROS_DEL",
     GROUP_SCORE       = "GRP_SCR",
     GROUP_SCORE_ACK   = "GRP_ACK",
     SNAPSHOT_REQUEST  = "SNP_REQ",

@@ -17,12 +17,6 @@ local function CommitRosterChange()
     PP:RefreshMainWindow()
 end
 
-local function CommitRosterDelta(changed, removed)
-    PP.Repo.Roster:BumpRosterVersion()
-    PP:BroadcastRosterDelta(changed, removed)
-    PP:RefreshMainWindow()
-end
-
 -- Build a new roster entry table from a normalised fullName.
 local function NewEntry(fullName)
     return {
@@ -48,7 +42,7 @@ function PP.Roster:Add(fullName)
         return
     end
     roster[fullName] = NewEntry(fullName)
-    CommitRosterDelta({[fullName] = roster[fullName]}, nil)
+    CommitRosterChange()
 end
 
 ---------------------------------------------------------------------------
@@ -62,7 +56,7 @@ function PP.Roster:Remove(fullName)
     end
     fullName = PP:GetFullName(fullName)
     PP.Repo.Roster:GetRoster()[fullName] = nil
-    CommitRosterDelta(nil, {fullName})
+    CommitRosterChange()
 end
 
 ---------------------------------------------------------------------------
@@ -82,7 +76,7 @@ function PP.Roster:SetScore(fullName, newScore)
     end
     newScore = tonumber(newScore) or 0
     roster[fullName].score = newScore
-    CommitRosterDelta({[fullName] = roster[fullName]}, nil)
+    CommitRosterChange()
     PP:Print(PP:GetShortName(fullName) .. " score set to " .. newScore)
 end
 
