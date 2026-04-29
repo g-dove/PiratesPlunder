@@ -211,8 +211,7 @@ function PPSession:AddBoss(encounterID, encounterName) end
 ---@param pointsSpent number
 ---@param response    string  PP.RESPONSE.*
 ---@param lootKey     string
----@param guildKey?   string  optional; route the award into this guild's active session (used when the receiver's _activeGuildKey is stale)
-function PPSession:RecordItemAward(itemLink, itemID, awardedTo, pointsSpent, response, lootKey, guildKey) end
+function PPSession:RecordItemAward(itemLink, itemID, awardedTo, pointsSpent, response, lootKey) end
 
 ---------------------------------------------------------------------------
 -- Service layer – Services/RosterService.lua
@@ -302,9 +301,7 @@ function PPLootService:_CancelIdleClear() end
 ---@field _sandboxMod   boolean
 ---@field _debug        boolean
 ---@field _ppUsers      table<string, boolean>|nil
----@field _seenAckIds   table<string, boolean>
 ---@field _completedLootKeys      table<string, boolean>
----@field _criticalAckSnapshots table<string, table>|nil
 ---@field _groupScoreHashes     table<string, number>|nil
 ---@field _lastFullSyncSent     number|nil
 ---@field _lastSyncRequestSent  number|nil
@@ -533,11 +530,13 @@ function PPAddon:HandleRaidSettings(data, sender) end
 
 function PPAddon:BroadcastRoster() end
 
---- Broadcasts to the group with an attached _ackId. Receivers echo back a roster
---- hash; mismatches schedule a single SendFullSync. No per-member whisper retry.
----@param msgType string  PP.MSG.*
----@param data    table
-function PPAddon:BroadcastCritical(msgType, data) end
+--- Apply (guildKey, activeSessionID, activeSessionVersion) from any inbound
+--- broadcast. Adopts a newer active session, ends a stale local one, updates
+--- _activeGuildKey when in a raid. Idempotent.
+---@param guildKey             string
+---@param activeSessionID      string|nil
+---@param activeSessionVersion number|nil
+function PPAddon:_adoptSessionContext(guildKey, activeSessionID, activeSessionVersion) end
 
 function PPAddon:WipeRetryQueue() end
 

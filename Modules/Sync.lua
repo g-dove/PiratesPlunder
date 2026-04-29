@@ -5,18 +5,11 @@
 local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 
 ---------------------------------------------------------------------------
--- Reliable broadcast state
+-- Sync state
 ---------------------------------------------------------------------------
 local FULL_SYNC_COOLDOWN = 10 -- seconds before another full sync can broadcast
 
-PP._seenAckIds       = {}
 PP._completedLootKeys = {}
-
-local _ackCounter = 0
-local function newAckId()
-    _ackCounter = _ackCounter + 1
-    return string.format("%x-%x-%x", time(), math.floor(GetTime() * 1000) % 0x10000, _ackCounter)
-end
 
 local function ComputeRosterHash(roster)
     local keys = {}
@@ -79,19 +72,6 @@ end
 
 function PP:SendAddonMessage(msgType, data, target)
     if self._sandbox then return end
-    if type(data) == "table" and data._ackId then
-        if not PP._criticalAckSnapshots then PP._criticalAckSnapshots = {} end
-        if not PP._criticalAckSnapshots[data._ackId] then
-            local gk = data.guildKey or self:GetActiveGuildKey()
-            local gd = PP.Repo.Roster:GetData(gk)
-            local h  = gd and ComputeRosterHash(gd.roster) or nil
-            local id = data._ackId
-            PP._criticalAckSnapshots[id] = { hash = h, guildKey = gk, rosterVersion = gd and gd.rosterVersion or nil, syncTriggered = false }
-            PP:ScheduleTimer(function()
-                if PP._criticalAckSnapshots then PP._criticalAckSnapshots[id] = nil end
-            end, 30)
-        end
-    end
     local payload = self:Serialize(newSalt(), msgType, data)
     local prio    = MSG_PRIORITY[msgType] or "NORMAL"
     if target then
@@ -128,21 +108,7 @@ function PP:OnCommReceived(prefix, message, distribution, sender)
     PP._ppUsers = PP._ppUsers or {}
     PP._ppUsers[sender] = true
 
-    if type(data) == "table" and data._ackId then
-        local gk = (type(data) == "table" and data.guildKey) or self:GetActiveGuildKey()
-        local gd = PP.Repo.Roster:GetData(gk)
-        self:SendAddonMessage(PP.MSG.ACK, {
-            ackId         = data._ackId,
-            hash          = gd and ComputeRosterHash(gd.roster) or nil,
-            guildKey      = gk,
-            rosterVersion = gd and gd.rosterVersion or nil,
-        }, sender)
-    end
-
-    if msgType == PP.MSG.ACK then
-        if data and data.ackId then self:_handleAck(data, sender) end
-
-    elseif msgType == PP.MSG.SYNC_REQUEST then
+    if msgType == PP.MSG.SYNC_REQUEST then
         self:HandleSyncRequest(sender, data)
 
     elseif msgType == PP.MSG.SYNC_FULL then
@@ -244,46 +210,51 @@ function PP:BroadcastRaidSettings()
 end
 
 ---------------------------------------------------------------------------
--- Reliable broadcast: broadcast to the group and attach an ackId so
--- recipients send back their roster hash. Any hash mismatch triggers a full
--- sync — no per-member whisper retries (WoW's RAID/PARTY channel is
--- reliable for online members; offline/loading clients recover via
--- RequestSync on reconnect).
+-- _adoptSessionContext(guildKey, activeSessionID, activeSessionVersion)
 --
--- Raid leader is the single source of truth for all authoritative state
--- (roster mutations, loot lifecycle, session lifecycle). Officers and
--- assists never push data to the raid; they only observe and respond.
+-- Every roster and loot broadcast carries the leader's (guildKey,
+-- activeSessionID, activeSessionVersion). Receivers run this helper before
+-- handling the message so they always converge on the leader's session even
+-- if they missed SESSION_CREATE (e.g. mid-load, in a different guild). The
+-- version monotonically rises whenever SetActiveSessionID/ClearActiveSessionID
+-- is called on the leader's client, so older versions are ignored as stale.
 ---------------------------------------------------------------------------
-function PP:BroadcastCritical(msgType, data)
-    if self._sandbox or not IsInGroup() then return end
-    if not self:IsRaidLeader() then return end
-    local id = newAckId()
-    data._ackId = id
-    self:SendAddonMessage(msgType, data)
-end
+function PP:_adoptSessionContext(guildKey, activeSessionID, activeSessionVersion)
+    if not guildKey or not activeSessionVersion then return end
+    local gd = PP.Repo.Roster:EnsureData(guildKey)
+    local localVer = gd.activeSessionVersion or 0
+    if activeSessionVersion <= localVer then return end
 
-function PP:_handleAck(data, sender)
-    if not data.ackId then return end
-    local snap = PP._criticalAckSnapshots and PP._criticalAckSnapshots[data.ackId]
-    if not snap then return end
-    -- Snapshot cleanup is timer-driven (30s); don't nil it here so all members' hashes are checked.
-    if snap.syncTriggered then return end
-    if not (data.hash and snap.hash and snap.rosterVersion and data.rosterVersion) then return end
-    if snap.rosterVersion == data.rosterVersion then
-        local match = snap.hash == data.hash
-        if PP._debug then
-            local label = match and "|cFF00FF00match \226\156\147|r" or "|cFFFF4400MISMATCH \226\156\151|r"
-            self:Print("[Sync] ACK hash from " .. self:GetShortName(sender) .. ": " .. label)
+    local existingID = gd.activeSessionID
+    if activeSessionID then
+        if existingID and existingID ~= activeSessionID
+           and gd.sessions[existingID] and gd.sessions[existingID].active then
+            PP.Session:End(PP.SESSION_END.SYNC_RECEIVED, existingID, guildKey)
         end
-        if not match then
-            snap.syncTriggered = true
-            self:ScheduleTimer(function() self:SendFullSync(snap.guildKey) end, 0.5)
+        gd.activeSessionID      = activeSessionID
+        gd.activeSessionVersion = activeSessionVersion
+        if gd.sessions[activeSessionID] and not gd.sessions[activeSessionID].active then
+            gd.sessions[activeSessionID].active  = true
+            gd.sessions[activeSessionID].endTime = nil
         end
+        if IsInRaid() then self._activeGuildKey = guildKey end
+        -- A pending end timer for this session is now obsolete (we just learned
+        -- the leader still has it active).
+        if self.db.global.pendingSessionEnd
+           and self.db.global.pendingSessionEnd.sessionID == activeSessionID then
+            self.db.global.pendingSessionEnd = nil
+            if self._pendingSessionEndTimer then
+                self:CancelTimer(self._pendingSessionEndTimer)
+                self._pendingSessionEndTimer = nil
+            end
+        end
+    elseif existingID then
+        PP.Session:End(PP.SESSION_END.SYNC_FULL, existingID, guildKey)
+        gd.activeSessionVersion = activeSessionVersion
     end
 end
 
 function PP:WipeRetryQueue()
-    PP._criticalAckSnapshots = {}
     if PP._lootIdleTimer then
         PP:CancelTimer(PP._lootIdleTimer)
         PP._lootIdleTimer = nil
@@ -340,10 +311,12 @@ function PP:BroadcastRoster()
         self:Print("[Sync] Full roster broadcast sent (v" .. gd.rosterVersion .. ")")
     end
     self:SendAddonMessage(PP.MSG.ROSTER_UPDATE, {
-        roster   = gd.roster,
-        version  = gd.rosterVersion,
-        guildKey = gk,
-        hash     = ComputeRosterHash(gd.roster),
+        roster               = gd.roster,
+        version              = gd.rosterVersion,
+        guildKey             = gk,
+        hash                 = ComputeRosterHash(gd.roster),
+        activeSessionID      = gd.activeSessionID,
+        activeSessionVersion = gd.activeSessionVersion,
     })
 end
 
@@ -363,44 +336,58 @@ function PP:BroadcastGroupScore(amount)
         self:Print("[Sync] Group score +" .. (amount or 1) .. " broadcast (v" .. ver .. ")")
     end
     self:SendAddonMessage(PP.MSG.GROUP_SCORE, {
-        amount   = amount or 1,
-        version  = ver,
-        guildKey = gk,
+        amount               = amount or 1,
+        version              = ver,
+        guildKey             = gk,
+        activeSessionID      = gd.activeSessionID,
+        activeSessionVersion = gd.activeSessionVersion,
     })
 end
 
 function PP:BroadcastSessionCreate(sessionID)
     if not IsInGroup() then return end
+    if not self:IsRaidLeader() then return end
     local gk = self:GetActiveGuildKey()
     local gd = PP.Repo.Roster:GetData(gk)
     if not gd then return end
     local s = gd.sessions[sessionID]
     if not s then return end
-    self:BroadcastCritical(PP.MSG.SESSION_CREATE, {
-        raidID   = sessionID,
-        raid     = {
+    self:SendAddonMessage(PP.MSG.SESSION_CREATE, {
+        raidID               = sessionID,
+        raid                 = {
             name      = s.name,
             startTime = s.startTime,
         },
-        guildKey = gk,
+        guildKey             = gk,
+        activeSessionID      = gd.activeSessionID,
+        activeSessionVersion = gd.activeSessionVersion,
     })
 end
 
 function PP:BroadcastSessionClose(sessionID, snapshot)
     if not IsInGroup() then return end
-    self:BroadcastCritical(PP.MSG.SESSION_CLOSE, {
-        raidID   = sessionID,
-        guildKey = self:GetActiveGuildKey(),
-        snapshot = snapshot,
+    if not self:IsRaidLeader() then return end
+    local gk = self:GetActiveGuildKey()
+    local gd = PP.Repo.Roster:GetData(gk)
+    self:SendAddonMessage(PP.MSG.SESSION_CLOSE, {
+        raidID               = sessionID,
+        guildKey             = gk,
+        snapshot             = snapshot,
+        activeSessionID      = gd and gd.activeSessionID or nil,
+        activeSessionVersion = gd and gd.activeSessionVersion or nil,
     })
 end
 
 function PP:BroadcastSessionDelete(sessionID, guildKey, newVersion)
     if not IsInGroup() then return end
-    self:BroadcastCritical(PP.MSG.SESSION_DELETE, {
-        raidID   = sessionID,
-        guildKey = guildKey,
-        version  = newVersion,
+    if not self:CanModify() then return end
+    local gd = PP.Repo.Roster:GetData(guildKey)
+    self:SendAddonMessage(PP.MSG.SESSION_DELETE, {
+        raidID               = sessionID,
+        guildKey             = guildKey,
+        version              = newVersion,
+        activeSessionID      = gd and gd.activeSessionID or nil,
+        activeSessionVersion = gd and gd.activeSessionVersion or nil,
     })
 end
 
@@ -650,6 +637,7 @@ end
 
 function PP:HandleRosterUpdate(data, sender)
     if not data or not data.guildKey then return end
+    self:_adoptSessionContext(data.guildKey, data.activeSessionID, data.activeSessionVersion)
     local gd = PP.Repo.Roster:GetData(data.guildKey)
     if not gd then return end
     if data.version and data.version > gd.rosterVersion then
@@ -669,6 +657,7 @@ end
 
 function PP:HandleGroupScore(data, sender)
     if not data or not data.guildKey then return end
+    self:_adoptSessionContext(data.guildKey, data.activeSessionID, data.activeSessionVersion)
     local gd = PP.Repo.Roster:GetData(data.guildKey)
     if not gd then return end
     if not (data.version and data.version > gd.rosterVersion) then return end
@@ -718,16 +707,7 @@ function PP:HandleSessionCreate(data, sender)
     if not data or not data.raidID or not data.raid then return end
     local gk = data.guildKey or self:GetActiveGuildKey()
     local gd = PP.Repo.Roster:EnsureData(gk)
-    -- End any conflicting locally-active session before adopting the incoming one.
-    -- Guards against the race where two officers create sessions before either
-    -- receives the other's broadcast.
-    local existingID = gd.activeSessionID
-    if existingID and existingID ~= data.raidID
-       and gd.sessions[existingID]
-       and gd.sessions[existingID].active then
-        PP.Session:End(PP.SESSION_END.SYNC_RECEIVED, existingID, gk)
-    end
-    gd.sessions[data.raidID] = {
+    gd.sessions[data.raidID] = gd.sessions[data.raidID] or {
         name      = data.raid.name,
         startTime = data.raid.startTime,
         guildKey  = data.guildKey,
@@ -738,20 +718,16 @@ function PP:HandleSessionCreate(data, sender)
         active    = true,
         endTime   = nil,
     }
-    PP.Repo.Roster:SetActiveSessionID(gk, data.raidID)
-    -- When in a raid, always adopt the session's guild key — guards against the
-    -- timing race where GetRaidLeaderGuild() returned nil in OnGroupRosterUpdate
-    -- before unit data had populated.  Outside a raid, only set if unset.
-    if IsInRaid() or not self._activeGuildKey then
-        self._activeGuildKey = gk
-    end
+    self:_adoptSessionContext(gk, data.activeSessionID or data.raidID, data.activeSessionVersion)
+    -- Outside a raid, ensure _activeGuildKey is set (helper only does this when
+    -- IsInRaid() to avoid clobbering a manual selection).
+    if not self._activeGuildKey then self._activeGuildKey = gk end
     -- If we have no roster data yet (fresh install / cleared vars), request a
     -- sync so the officer sends us the full roster now that a session is active.
     if gd.rosterVersion == 0 then
         self:ScheduleTimer(function() self:RequestSync() end, 1)
     end
     self:Print("Session started: " .. (data.raid.name or data.raidID))
-    PP._seenAckIds        = {}
     PP._completedLootKeys = {}
     self:RefreshMainWindow()
 end
@@ -830,11 +806,7 @@ end
 function PP:HandleLootPost(data, sender)
     if not data or not data.key then return end
     if PP._completedLootKeys[data.key] then return end
-    if data._ackId then
-        local key = sender .. ":" .. tostring(data._ackId)
-        if PP._seenAckIds[key] then return end
-        PP._seenAckIds[key] = true
-    end
+    self:_adoptSessionContext(data.guildKey, data.activeSessionID, data.activeSessionVersion)
     -- Store locally so we can respond
     PP.Repo.Loot:SetEntry(data.key, {
         itemLink      = data.itemLink,
@@ -864,16 +836,12 @@ end
 -- Loot awarded
 function PP:HandleLootAward(data, sender)
     if not data or not data.key then return end
-    if data._ackId then
-        local key = sender .. ":" .. tostring(data._ackId)
-        if PP._seenAckIds[key] then return end
-        PP._seenAckIds[key] = true
-    end
-    -- Record item in raid history for all clients.  Use the guildKey from the
-    -- award payload so receivers with a stale _activeGuildKey still write the
-    -- item into the correct session.
+    if PP._completedLootKeys[data.key] then return end
+    self:_adoptSessionContext(data.guildKey, data.activeSessionID, data.activeSessionVersion)
+    -- Record item in raid history for all clients. Active session has been
+    -- adopted above, so PP.Session:RecordItemAward writes into the right one.
     if data.itemLink and data.awardedTo then
-        PP.Session:RecordItemAward(data.itemLink, data.itemID, data.awardedTo, data.pointsSpent, data.response, data.key, data.guildKey)
+        PP.Session:RecordItemAward(data.itemLink, data.itemID, data.awardedTo, data.pointsSpent, data.response, data.key)
     end
     -- Apply score deduction to the winner
     if data.awardedTo and data.newScore ~= nil then
@@ -1005,11 +973,8 @@ end
 -- Loot posting cancelled
 function PP:HandleLootCancel(data, sender)
     if not data or not data.key then return end
-    if data._ackId then
-        local key = sender .. ":" .. tostring(data._ackId)
-        if PP._seenAckIds[key] then return end
-        PP._seenAckIds[key] = true
-    end
+    if PP._completedLootKeys[data.key] then return end
+    self:_adoptSessionContext(data.guildKey, data.activeSessionID, data.activeSessionVersion)
     PP._completedLootKeys[data.key] = true
     PP.Repo.Loot:ClearEntry(data.key)
     if self.lootPopups[data.key] then

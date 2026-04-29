@@ -148,14 +148,20 @@ function PP.Loot:Post(itemLink)
     })
 
     -- Broadcast to raid (other players will show their own popup via HandleLootPost)
-    PP:BroadcastCritical(PP.MSG.LOOT_POST, {
-        key           = key,
-        itemLink      = itemLink,
-        itemID        = itemID,
-        postedBy      = PP:GetPlayerFullName(),
-        allowTransmog = PP.db.global.allowTransmogRolls ~= false,
-        guildKey      = PP:GetActiveGuildKey(),
-    })
+    if PP:IsRaidLeader() and IsInGroup() then
+        local gk = PP:GetActiveGuildKey()
+        local gd = PP.Repo.Roster:GetData(gk)
+        PP:SendAddonMessage(PP.MSG.LOOT_POST, {
+            key                  = key,
+            itemLink             = itemLink,
+            itemID               = itemID,
+            postedBy             = PP:GetPlayerFullName(),
+            allowTransmog        = PP.db.global.allowTransmogRolls ~= false,
+            guildKey             = gk,
+            activeSessionID      = gd and gd.activeSessionID or nil,
+            activeSessionVersion = gd and gd.activeSessionVersion or nil,
+        })
+    end
 
     -- Also show the unified response popup (adds this item to it)
     PP:ShowLootResponseFrame()
@@ -173,10 +179,16 @@ function PP.Loot:Cancel(key)
     if not PP.Repo.Loot:GetEntry(key) then return end
     PP.Repo.Loot:ClearEntry(key)
 
-    PP:BroadcastCritical(PP.MSG.LOOT_CANCEL, {
-        key      = key,
-        guildKey = PP:GetActiveGuildKey(),
-    })
+    if PP:IsRaidLeader() and IsInGroup() then
+        local gk = PP:GetActiveGuildKey()
+        local gd = PP.Repo.Roster:GetData(gk)
+        PP:SendAddonMessage(PP.MSG.LOOT_CANCEL, {
+            key                  = key,
+            guildKey             = gk,
+            activeSessionID      = gd and gd.activeSessionID or nil,
+            activeSessionVersion = gd and gd.activeSessionVersion or nil,
+        })
+    end
     if next(PP.Repo.Loot:GetAll()) == nil then
         PP.Loot:_ScheduleIdleClear()
     end
@@ -247,21 +259,26 @@ function PP.Loot:Award(key, fullName, free)
     -- Single broadcast carries score change + roster version/hash so receivers
     -- can update scores and verify sync inline; mismatch falls back to a full
     -- roster broadcast from the leader.
-    local gk         = PP:GetActiveGuildKey()
-    local rosterVer  = PP.Repo.Roster:GetRosterVersion(gk)
-    local rosterHash = PP.ComputeRosterHash and PP.ComputeRosterHash(PP.Repo.Roster:GetRoster(gk)) or nil
-    PP:BroadcastCritical(PP.MSG.LOOT_AWARD, {
-        key           = key,
-        itemLink      = entry.itemLink,
-        itemID        = entry.itemID,
-        awardedTo     = fullName,
-        response      = winnerResponse,
-        pointsSpent   = pointsSpent,
-        newScore      = newScore,
-        guildKey      = gk,
-        rosterVersion = rosterVer,
-        rosterHash    = rosterHash,
-    })
+    if PP:IsRaidLeader() and IsInGroup() then
+        local gk         = PP:GetActiveGuildKey()
+        local gd         = PP.Repo.Roster:GetData(gk)
+        local rosterVer  = PP.Repo.Roster:GetRosterVersion(gk)
+        local rosterHash = PP.ComputeRosterHash and PP.ComputeRosterHash(PP.Repo.Roster:GetRoster(gk)) or nil
+        PP:SendAddonMessage(PP.MSG.LOOT_AWARD, {
+            key                  = key,
+            itemLink             = entry.itemLink,
+            itemID               = entry.itemID,
+            awardedTo            = fullName,
+            response             = winnerResponse,
+            pointsSpent          = pointsSpent,
+            newScore             = newScore,
+            guildKey             = gk,
+            rosterVersion        = rosterVer,
+            rosterHash           = rosterHash,
+            activeSessionID      = gd and gd.activeSessionID or nil,
+            activeSessionVersion = gd and gd.activeSessionVersion or nil,
+        })
+    end
 
     -- Remove from pending loot; schedule idle clear if queue is now empty
     PP.Repo.Loot:ClearEntry(key)

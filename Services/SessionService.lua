@@ -32,7 +32,6 @@ function PP.Session:End(reason, sessionID, guildKey)
     if not sessionID then return end
 
     PP:WipeRetryQueue()
-    PP._seenAckIds = {}
     PP.Repo.Roster:MarkSessionEnded(guildKey, sessionID, time(), reason)
     PP.Repo.Roster:ClearActiveSessionID(guildKey)
     PP.Repo.Loot:WipeAll()
@@ -105,7 +104,6 @@ function PP.Session:Create(raidName)
     end
 
     PP:WipeRetryQueue()
-    PP._seenAckIds = {}
 
     local sessionID = tostring(time()) .. "-" .. math.random(1000, 9999)
     local leader    = PP:GetPlayerFullName()
@@ -303,21 +301,12 @@ function PP.Session:AddBoss(encounterID, encounterName)
 end
 
 ---------------------------------------------------------------------------
--- RecordItemAward(itemLink, itemID, awardedTo, pointsSpent, response, lootKey, guildKey)
--- guildKey is optional; when supplied (e.g. from a LOOT_AWARD payload) we
--- look up that guild's active session directly rather than relying on the
--- receiver's _activeGuildKey, which may be stale during the join handshake.
+-- RecordItemAward(itemLink, itemID, awardedTo, pointsSpent, response, lootKey)
+-- Receivers run _adoptSessionContext before this fires, so the active session
+-- is already correct for the receiver's local state.
 ---------------------------------------------------------------------------
-function PP.Session:RecordItemAward(itemLink, itemID, awardedTo, pointsSpent, response, lootKey, guildKey)
-    local session
-    if guildKey then
-        local gd = PP.Repo.Roster:GetData(guildKey)
-        if gd and gd.activeSessionID then
-            session = gd.sessions[gd.activeSessionID]
-        end
-    else
-        session = PP.Repo.Roster:GetActiveSession()
-    end
+function PP.Session:RecordItemAward(itemLink, itemID, awardedTo, pointsSpent, response, lootKey)
+    local session = PP.Repo.Roster:GetActiveSession()
     if not session then return end
     session.items[#session.items + 1] = {
         itemLink    = itemLink,
