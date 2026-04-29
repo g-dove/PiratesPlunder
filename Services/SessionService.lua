@@ -38,12 +38,28 @@ function PP.Session:End(reason, sessionID, guildKey)
     PP.Repo.Loot:WipeAll()
     PP:CloseLootPopups()
 
+    -- Capture a roster snapshot tagged with the current rosterVersion. Every
+    -- client that runs End() locally writes its own snapshot; rosterVersion
+    -- arbitration in SetSessionSnapshot keeps the highest-version copy.
+    -- RESET wipes data deliberately; SYNC_DELETE arrives after the session
+    -- and its snapshot have already been removed, so capturing here would
+    -- resurrect a snapshot for a deleted session.
+    local capturedSnapshot
+    local skipSnapshot = (reason == PP.SESSION_END.RESET)
+                          or (reason == PP.SESSION_END.SYNC_DELETE)
+    if not skipSnapshot then
+        capturedSnapshot = PP.Repo.Roster:BuildRosterSnapshot(guildKey)
+        if capturedSnapshot then
+            PP.Repo.Roster:SetSessionSnapshot(guildKey, sessionID, capturedSnapshot)
+        end
+    end
+
     -- Reason-specific messaging
     if reason == PP.SESSION_END.OFFICER_ACTION then
         local gd2 = PP.Repo.Roster:GetData(guildKey)
         local session = gd2 and gd2.sessions and gd2.sessions[sessionID]
         PP:Print("Session ended: " .. (session and session.name or sessionID))
-        PP:BroadcastSessionClose(sessionID)
+        PP:BroadcastSessionClose(sessionID, capturedSnapshot)
     elseif reason == PP.SESSION_END.LEFT_GROUP then
         local me = PP:GetPlayerFullName()
         local gd2 = PP.Repo.Roster:GetData(guildKey)
@@ -159,6 +175,7 @@ function PP.Session:Delete(raidID)
     end
 
     gd.sessions[raidID] = nil
+    if gd.sessionSnapshots then gd.sessionSnapshots[raidID] = nil end
     PP.Repo.Roster:BumpRosterVersion(gk)  -- version bump so peers accept the delete
 
     -- Write tombstone so full-syncs propagate the deletion to offline peers
@@ -170,6 +187,10 @@ function PP.Session:Delete(raidID)
     if PP._raidDetailWindow then
         PP._raidDetailWindow:Release()
         PP._raidDetailWindow = nil
+    end
+    if PP._snapshotWindow then
+        PP._snapshotWindow:Release()
+        PP._snapshotWindow = nil
     end
 
     PP:RefreshMainWindow()

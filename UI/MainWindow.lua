@@ -607,11 +607,12 @@ end
 ---------------------------------------------------------------------------
 function PP:ShowRaidDetail(raidID)
     -- Search all guild data blocks since the session may belong to any guild
-    local raid
+    local raid, raidGuildKey
     for _, gk in ipairs(PP.Repo.Roster:GetAllGuildKeys()) do
         local gd = PP.Repo.Roster:GetData(gk)
         if gd and gd.sessions and gd.sessions[raidID] then
             raid = gd.sessions[raidID]
+            raidGuildKey = gk
             break
         end
     end
@@ -654,6 +655,24 @@ function PP:ShowRaidDetail(raidID)
         .. "\nStarted: " .. startStr
         .. "\nEnded: " .. endStr)
     scroll:AddChild(info)
+
+    -- Roster snapshot button: only meaningful for ended sessions, and only
+    -- when we actually have a snapshot stored locally. Active sessions show
+    -- live roster on the Roster tab; no need to duplicate it here.
+    if not raid.active then
+        local snapshot = PP.Repo.Roster:GetSessionSnapshot(raidGuildKey, raidID)
+        if snapshot then
+            local snapBtn = AceGUI:Create("Button")
+            snapBtn:SetText("View Roster Snapshot")
+            snapBtn:SetWidth(180)
+            local capturedRaidID = raidID
+            local capturedGK     = raidGuildKey
+            snapBtn:SetCallback("OnClick", function()
+                PP:ShowRosterSnapshot(capturedGK, capturedRaidID)
+            end)
+            scroll:AddChild(snapBtn)
+        end
+    end
 
     -- Delete Raid button (officer only, not available in sandbox)
     if self:IsOfficerOrHigher() and not self:IsSandbox() then
@@ -712,6 +731,122 @@ function PP:ShowRaidDetail(raidID)
         ni:SetFullWidth(true)
         ni:SetText("  No items awarded.")
         scroll:AddChild(ni)
+    end
+end
+
+---------------------------------------------------------------------------
+-- Roster snapshot popup (frozen end-of-session standings)
+---------------------------------------------------------------------------
+function PP:ShowRosterSnapshot(guildKey, sessionID)
+    local snapshot = PP.Repo.Roster:GetSessionSnapshot(guildKey, sessionID)
+    if not snapshot then return end
+
+    -- Reuse a single popup; opening another snapshot replaces the previous.
+    if self._snapshotWindow then
+        self._snapshotWindow:Release()
+        self._snapshotWindow = nil
+    end
+
+    local gd = PP.Repo.Roster:GetData(guildKey)
+    local sessionName = (gd and gd.sessions and gd.sessions[sessionID] and gd.sessions[sessionID].name)
+                        or sessionID
+
+    local f = AceGUI:Create("Frame")
+    f:SetTitle("Roster Snapshot - " .. sessionName)
+    f:SetLayout("Fill")
+    f:SetWidth(450)
+    f:SetHeight(500)
+    f:SetCallback("OnClose", function(widget)
+        AceGUI:Release(widget)
+        PP._snapshotWindow = nil
+    end)
+    self._snapshotWindow = f
+    PP:RegisterEscFrame(f, "PPSnapshotFrame")
+
+    local scroll = AceGUI:Create("ScrollFrame")
+    scroll:SetFullWidth(true)
+    scroll:SetFullHeight(true)
+    scroll:SetLayout("List")
+    f:AddChild(scroll)
+
+    local capturedStr = snapshot.capturedAt
+                        and date("%Y-%m-%d %H:%M:%S", snapshot.capturedAt)
+                        or "unknown"
+    local meta = AceGUI:Create("Label")
+    meta:SetFullWidth(true)
+    meta:SetText("Captured: |cFFFFFFFF" .. capturedStr .. "|r"
+        .. "\nRoster version: |cFFFFFFFF" .. tostring(snapshot.rosterVersion or "?") .. "|r")
+    scroll:AddChild(meta)
+
+    local heading = AceGUI:Create("Heading")
+    heading:SetFullWidth(true)
+    heading:SetText("Standings (sorted by score)")
+    scroll:AddChild(heading)
+
+    -- Column headers
+    local headerRow = AceGUI:Create("SimpleGroup")
+    headerRow:SetFullWidth(true)
+    headerRow:SetLayout("Flow")
+    scroll:AddChild(headerRow)
+
+    local h1 = AceGUI:Create("Label")
+    h1:SetText("|cFFFFD100#|r"); h1:SetWidth(30)
+    headerRow:AddChild(h1)
+    local h2 = AceGUI:Create("Label")
+    h2:SetText("|cFFFFD100Name|r"); h2:SetWidth(180)
+    headerRow:AddChild(h2)
+    local h3 = AceGUI:Create("Label")
+    h3:SetText("|cFFFFD100Realm|r"); h3:SetWidth(140)
+    headerRow:AddChild(h3)
+    local h4 = AceGUI:Create("Label")
+    h4:SetText("|cFFFFD100Score|r"); h4:SetWidth(60)
+    headerRow:AddChild(h4)
+
+    -- Sort entries by score desc, name asc
+    local sorted = {}
+    for fullName, entry in pairs(snapshot.entries or {}) do
+        sorted[#sorted + 1] = {
+            fullName = fullName,
+            name     = entry.name or PP:GetShortName(fullName),
+            realm    = entry.realm or "",
+            score    = entry.score or 0,
+        }
+    end
+    table.sort(sorted, function(a, b)
+        if a.score ~= b.score then return a.score > b.score end
+        return a.name < b.name
+    end)
+
+    if #sorted == 0 then
+        local empty = AceGUI:Create("Label")
+        empty:SetFullWidth(true)
+        empty:SetText("\n  Snapshot has no roster entries.")
+        scroll:AddChild(empty)
+        return
+    end
+
+    for idx, entry in ipairs(sorted) do
+        local row = AceGUI:Create("SimpleGroup")
+        row:SetFullWidth(true)
+        row:SetLayout("Flow")
+
+        local numLabel = AceGUI:Create("Label")
+        numLabel:SetText(tostring(idx)); numLabel:SetWidth(30)
+        row:AddChild(numLabel)
+
+        local nameLabel = AceGUI:Create("Label")
+        nameLabel:SetText("|cFFAAAAAA" .. entry.name .. "|r"); nameLabel:SetWidth(180)
+        row:AddChild(nameLabel)
+
+        local realmLabel = AceGUI:Create("Label")
+        realmLabel:SetText(entry.realm); realmLabel:SetWidth(140)
+        row:AddChild(realmLabel)
+
+        local scoreLabel = AceGUI:Create("Label")
+        scoreLabel:SetText("|cFFFFFF00" .. tostring(entry.score) .. "|r"); scoreLabel:SetWidth(60)
+        row:AddChild(scoreLabel)
+
+        scroll:AddChild(row)
     end
 end
 
@@ -778,6 +913,19 @@ function PP:DrawSettingsTab(container)
         end)
         syncGroup:AddChild(broadcastBtn)
     end
+
+    local snapshotFetchBtn = AceGUI:Create("Button")
+    snapshotFetchBtn:SetText("Fetch Session Snapshots")
+    snapshotFetchBtn:SetWidth(200)
+    snapshotFetchBtn:SetCallback("OnClick", function()
+        PP:RequestSessionSnapshots()
+    end)
+    syncGroup:AddChild(snapshotFetchBtn)
+
+    local snapshotDesc = AceGUI:Create("Label")
+    snapshotDesc:SetFullWidth(true)
+    snapshotDesc:SetText("|cFFAAAAAA  Backfills end-of-session roster snapshots from any group member that has newer copies.\n|r")
+    scroll:AddChild(snapshotDesc)
 
     -- ── Loot section ─────────────────────────────────────────────────────────
     local lootHead = AceGUI:Create("Heading")
