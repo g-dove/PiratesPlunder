@@ -45,9 +45,10 @@ PiratesPlunder.MSG = {
     VERSION_REPLY     = "VER_REP",
     ACK               = "ACK",
     GROUP_SCORE       = "GRP_SCR",
-    GROUP_SCORE_ACK   = "GRP_ACK",
     SNAPSHOT_REQUEST  = "SNP_REQ",
     SNAPSHOT_REPLY    = "SNP_REP",
+    SESSION_SYNC_REQUEST = "SES_SRQ",
+    SESSION_SYNC_REPLY   = "SES_SRP",
 }
 
 -- Loot response types
@@ -638,7 +639,7 @@ function PiratesPlunder:_ScheduleJoinSync(attempt)
             -- it for the version-check window's prepopulated list.
             self:SendAddonMessage(PP.MSG.VERSION_REPLY, { version = PP.VERSION })
         end
-        self:RequestSync()
+        self:RequestSessionSync()
         self:ScheduleTimer(function()
             if IsInGroup()
                and PP._ppUsers and next(PP._ppUsers)
@@ -744,10 +745,10 @@ function PiratesPlunder:CompletePendingSessionEnd()
     if PP.Repo.Roster:HasActiveSession() then
         PP.Session:End(PP.SESSION_END.LEFT_GROUP)
         -- If we are somehow still in a group (e.g. disconnect timer fired just
-        -- before reconnect), request a sync immediately so HandleSyncFull can
-        -- reactivate the session before the player notices.
+        -- before reconnect), request a sync immediately so the leader's reply
+        -- can reactivate the session before the player notices.
         if IsInGroup() then
-            self:ScheduleTimer(function() self:RequestSync() end, 1)
+            self:ScheduleTimer(function() self:RequestSessionSync() end, 1)
         end
     end
     -- Reset active guild to own guild
@@ -771,7 +772,7 @@ function PiratesPlunder:OnGuildRosterUpdate()
     -- If a sync was deferred waiting for guild data to load, fire it now
     if self._pendingSyncOnGuildLoad and IsInGroup() then
         self._pendingSyncOnGuildLoad = false
-        self:ScheduleTimer(function() self:RequestSync() end, 1)
+        self:ScheduleTimer(function() self:RequestSessionSync() end, 1)
     end
 end
 
@@ -859,7 +860,7 @@ function PiratesPlunder:OnPlayerEnteringWorld(_, isInitialLogin, isReloadingUi)
             C_GuildInfo.GuildRoster()  -- async; triggers GUILD_ROSTER_UPDATE
         elseif IsInGroup() then
             -- Not guilded but in a group – sync immediately
-            self:ScheduleTimer(function() self:RequestSync() end, 5)
+            self:ScheduleTimer(function() self:RequestSessionSync() end, 5)
         end
         -- Restore cached loot, verify against loot master, then check for stale
         -- session state now that group membership is accurate.

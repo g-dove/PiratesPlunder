@@ -77,7 +77,7 @@ table.insert(PP._commandGroups, function(input)
     elseif input == "debug" then
         PP._debug = not PP._debug
         if PP._debug then
-            PP:Print("|cFFFFD100[Debug] Sync debug ON. Hash/delta events will print to chat.|r")
+            PP:Print("|cFFFFD100[Debug] Sync debug ON. Sync events will print to chat.|r")
         else
             PP:Print("|cFF888888[Debug] Sync debug OFF.|r")
         end

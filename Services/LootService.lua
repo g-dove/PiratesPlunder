@@ -149,8 +149,9 @@ function PP.Loot:Post(itemLink)
 
     -- Broadcast to raid (other players will show their own popup via HandleLootPost)
     if PP:IsRaidLeader() and IsInGroup() then
-        local gk = PP:GetActiveGuildKey()
-        local gd = PP.Repo.Roster:GetData(gk)
+        local gk     = PP:GetActiveGuildKey()
+        local gd     = PP.Repo.Roster:GetData(gk)
+        local active = gd and gd.activeSessionID and gd.sessions[gd.activeSessionID] or nil
         PP:SendAddonMessage(PP.MSG.LOOT_POST, {
             key                  = key,
             itemLink             = itemLink,
@@ -160,6 +161,14 @@ function PP.Loot:Post(itemLink)
             guildKey             = gk,
             activeSessionID      = gd and gd.activeSessionID or nil,
             activeSessionVersion = gd and gd.activeSessionVersion or nil,
+            -- Minimal session shell so receivers who missed SESSION_CREATE
+            -- can install a record before showing the response popup.
+            session              = active and {
+                name      = active.name,
+                startTime = active.startTime,
+                leader    = active.leader,
+                guildKey  = gk,
+            } or nil,
         })
     end
 
@@ -256,14 +265,14 @@ function PP.Loot:Award(key, fullName, free)
         IsInRaid() and "RAID" or "PARTY"
     )
 
-    -- Single broadcast carries score change + roster version/hash so receivers
-    -- can update scores and verify sync inline; mismatch falls back to a full
-    -- roster broadcast from the leader.
+    -- Single broadcast carries the score change + roster version so receivers
+    -- can update scores and detect missed broadcasts; a version gap triggers
+    -- RequestSessionSync to converge on the leader.
     if PP:IsRaidLeader() and IsInGroup() then
-        local gk         = PP:GetActiveGuildKey()
-        local gd         = PP.Repo.Roster:GetData(gk)
-        local rosterVer  = PP.Repo.Roster:GetRosterVersion(gk)
-        local rosterHash = PP.ComputeRosterHash and PP.ComputeRosterHash(PP.Repo.Roster:GetRoster(gk)) or nil
+        local gk        = PP:GetActiveGuildKey()
+        local gd        = PP.Repo.Roster:GetData(gk)
+        local rosterVer = PP.Repo.Roster:GetRosterVersion(gk)
+        local active    = gd and gd.activeSessionID and gd.sessions[gd.activeSessionID] or nil
         PP:SendAddonMessage(PP.MSG.LOOT_AWARD, {
             key                  = key,
             itemLink             = entry.itemLink,
@@ -274,9 +283,14 @@ function PP.Loot:Award(key, fullName, free)
             newScore             = newScore,
             guildKey             = gk,
             rosterVersion        = rosterVer,
-            rosterHash           = rosterHash,
             activeSessionID      = gd and gd.activeSessionID or nil,
             activeSessionVersion = gd and gd.activeSessionVersion or nil,
+            session              = active and {
+                name      = active.name,
+                startTime = active.startTime,
+                leader    = active.leader,
+                guildKey  = gk,
+            } or nil,
         })
     end
 

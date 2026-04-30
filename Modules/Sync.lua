@@ -7,51 +7,37 @@ local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 ---------------------------------------------------------------------------
 -- Sync state
 ---------------------------------------------------------------------------
-local FULL_SYNC_COOLDOWN = 10 -- seconds before another full sync can broadcast
+local FULL_SYNC_COOLDOWN    = 10 -- seconds before another full sync can broadcast
+local SESSION_SYNC_COOLDOWN = 5  -- hard gate on SESSION_SYNC_REPLY broadcasts
 
 PP._completedLootKeys = {}
 
-local function ComputeRosterHash(roster)
-    local keys = {}
-    for k in pairs(roster) do keys[#keys + 1] = k end
-    table.sort(keys)
-    local h = 0
-    for _, k in ipairs(keys) do
-        local score = roster[k] and roster[k].score or 0
-        for i = 1, #k do
-            h = (h * 31 + string.byte(k, i)) % 0x7FFFFFFF
-        end
-        h = (h * 31 + score) % 0x7FFFFFFF
-    end
-    return h
-end
-
-PP.ComputeRosterHash = ComputeRosterHash
-
 local MSG_PRIORITY = {
     -- Loot lifecycle: players respond to posts, awards update scores
-    [PP.MSG.LOOT_POST]        = "NORMAL",
-    [PP.MSG.LOOT_INTEREST]    = "NORMAL",
-    [PP.MSG.LOOT_AWARD]       = "NORMAL",
-    [PP.MSG.LOOT_CANCEL]      = "NORMAL",
-    [PP.MSG.LOOT_CLEAR]       = "NORMAL",
+    [PP.MSG.LOOT_POST]            = "NORMAL",
+    [PP.MSG.LOOT_INTEREST]        = "NORMAL",
+    [PP.MSG.LOOT_AWARD]           = "NORMAL",
+    [PP.MSG.LOOT_CANCEL]          = "NORMAL",
+    [PP.MSG.LOOT_CLEAR]           = "NORMAL",
     -- Session lifecycle
-    [PP.MSG.SESSION_CREATE]   = "NORMAL",
-    [PP.MSG.SESSION_CLOSE]    = "NORMAL",
+    [PP.MSG.SESSION_CREATE]       = "NORMAL",
+    [PP.MSG.SESSION_CLOSE]        = "NORMAL",
     -- Sync / informational
-    [PP.MSG.ACK]              = "NORMAL",
-    [PP.MSG.GROUP_SCORE]      = "NORMAL",
-    [PP.MSG.GROUP_SCORE_ACK]  = "NORMAL",
-    [PP.MSG.SYNC_REQUEST]     = "NORMAL",
-    [PP.MSG.VERSION_REQUEST]  = "NORMAL",
-    [PP.MSG.VERSION_REPLY]    = "NORMAL",
+    [PP.MSG.ACK]                  = "NORMAL",
+    [PP.MSG.GROUP_SCORE]          = "NORMAL",
+    [PP.MSG.SYNC_REQUEST]         = "NORMAL",
+    [PP.MSG.VERSION_REQUEST]      = "NORMAL",
+    [PP.MSG.VERSION_REPLY]        = "NORMAL",
+    [PP.MSG.SESSION_SYNC_REQUEST] = "NORMAL",
     -- Large payloads / background recovery
-    [PP.MSG.LOOT_STATE_QUERY] = "NORMAL",
-    [PP.MSG.RAID_SETTINGS]    = "BULK",
+    [PP.MSG.LOOT_STATE_QUERY]     = "NORMAL",
+    [PP.MSG.RAID_SETTINGS]        = "BULK",
     -- Snapshot fetch is user-triggered backfill; ship at BULK so it never
     -- competes with realtime loot/session traffic.
-    [PP.MSG.SNAPSHOT_REQUEST] = "BULK",
-    [PP.MSG.SNAPSHOT_REPLY]   = "BULK",
+    [PP.MSG.SNAPSHOT_REQUEST]     = "BULK",
+    [PP.MSG.SNAPSHOT_REPLY]       = "BULK",
+    -- Carries roster + active session + live loot state.
+    [PP.MSG.SESSION_SYNC_REPLY]   = "BULK",
 }
 
 ---------------------------------------------------------------------------
@@ -165,9 +151,6 @@ function PP:OnCommReceived(prefix, message, distribution, sender)
     elseif msgType == PP.MSG.GROUP_SCORE then
         self:HandleGroupScore(data, sender)
 
-    elseif msgType == PP.MSG.GROUP_SCORE_ACK then
-        self:HandleGroupScoreAck(data, sender)
-
     elseif msgType == PP.MSG.LOOT_CLEAR then
         self:HandleLootClear(sender)
 
@@ -176,6 +159,12 @@ function PP:OnCommReceived(prefix, message, distribution, sender)
 
     elseif msgType == PP.MSG.SNAPSHOT_REPLY then
         self:HandleSnapshotReply(data, sender, distribution)
+
+    elseif msgType == PP.MSG.SESSION_SYNC_REQUEST then
+        self:HandleSessionSyncRequest(sender, data)
+
+    elseif msgType == PP.MSG.SESSION_SYNC_REPLY then
+        self:HandleSessionSyncReply(data, sender, distribution)
     end
 end
 
@@ -254,6 +243,34 @@ function PP:_adoptSessionContext(guildKey, activeSessionID, activeSessionVersion
     end
 end
 
+---------------------------------------------------------------------------
+-- _ensureSessionRecord(guildKey, sessionID, sessionData)
+--
+-- Installs a minimal session shell at gd.sessions[sessionID] when the local
+-- record is missing. Used by handlers that may receive activity for a session
+-- whose SESSION_CREATE was missed (cold join, mid-load, brief disconnect).
+-- Returns true if the record now exists, false if we couldn't install it
+-- (no carried session data and no local record).
+---------------------------------------------------------------------------
+function PP:_ensureSessionRecord(guildKey, sessionID, sessionData)
+    if not guildKey or not sessionID then return false end
+    local gd = PP.Repo.Roster:EnsureData(guildKey)
+    if gd.sessions[sessionID] then return true end
+    if not sessionData then return false end
+    gd.sessions[sessionID] = {
+        name      = sessionData.name,
+        startTime = sessionData.startTime,
+        guildKey  = sessionData.guildKey or guildKey,
+        leader    = sessionData.leader,
+        items     = {},
+        bosses    = {},
+        members   = {},
+        active    = true,
+        endTime   = nil,
+    }
+    return true
+end
+
 function PP:WipeRetryQueue()
     if PP._lootIdleTimer then
         PP:CancelTimer(PP._lootIdleTimer)
@@ -314,7 +331,6 @@ function PP:BroadcastRoster()
         roster               = gd.roster,
         version              = gd.rosterVersion,
         guildKey             = gk,
-        hash                 = ComputeRosterHash(gd.roster),
         activeSessionID      = gd.activeSessionID,
         activeSessionVersion = gd.activeSessionVersion,
     })
@@ -327,11 +343,6 @@ function PP:BroadcastGroupScore(amount)
     local gd = PP.Repo.Roster:GetData(gk)
     if not gd then return end
     local ver = gd.rosterVersion
-    if not PP._groupScoreHashes then PP._groupScoreHashes = {} end
-    PP._groupScoreHashes[ver] = ComputeRosterHash(gd.roster)
-    for v in pairs(PP._groupScoreHashes) do
-        if v < ver - 10 then PP._groupScoreHashes[v] = nil end
-    end
     if PP._debug then
         self:Print("[Sync] Group score +" .. (amount or 1) .. " broadcast (v" .. ver .. ")")
     end
@@ -408,7 +419,6 @@ function PP:RequestSync()
         rosterVersion   = rosterVersion,
         raidItemCount   = raidItemCount,
         activeSessionID = activeSessionID,
-        hash            = gd and ComputeRosterHash(gd.roster) or nil,
     }
     PP._lastSyncRequestSent = time()
     self:SendAddonMessage(PP.MSG.SYNC_REQUEST, payload)
@@ -499,14 +509,7 @@ function PP:HandleSyncRequest(sender, data)
     -- Roster comparison only meaningful when requester referenced the same
     -- guild key we're about to respond with.  Otherwise treat as not-synced.
     local sameGuild = (data and data.guildKey == gk)
-    local rosterSynced
-    if sameGuild and data.hash then
-        rosterSynced = (ComputeRosterHash(gd.roster) == data.hash)
-    elseif sameGuild then
-        rosterSynced = (requesterVersion >= gd.rosterVersion)
-    else
-        rosterSynced = false
-    end
+    local rosterSynced = sameGuild and (requesterVersion >= gd.rosterVersion)
     if rosterSynced and requesterRaidItems >= myRaidItems and not sessionMismatch then return end
     -- Random jitter 0.3-1.5 s so multiple officers don't reply simultaneously.
     -- Whisper to the requester so the cooldown on broadcast SendFullSync cannot
@@ -635,6 +638,161 @@ function PP:HandleSyncFull(data, sender, distribution)
     self:RefreshMainWindow()
 end
 
+---------------------------------------------------------------------------
+-- Session sync: leader-only, narrow alternative to RequestSync / SYNC_FULL.
+--
+-- Carries a single guild's roster + the active session record + the live
+-- loot state (in-flight pendingLoot + _completedLootKeys). Replies are
+-- broadcast-only, gated by a 5 s cooldown so concurrent requesters from the
+-- same burst are coalesced into a single broadcast.
+---------------------------------------------------------------------------
+
+function PP:RequestSessionSync()
+    if not IsInGroup() then return end
+    if self._sandbox then return end
+    local gk = self:GetActiveGuildKey()
+    local gd = PP.Repo.Roster:GetData(gk)
+    self:SendAddonMessage(PP.MSG.SESSION_SYNC_REQUEST, {
+        guildKey             = gk,
+        activeSessionID      = gd and gd.activeSessionID or nil,
+        activeSessionVersion = gd and gd.activeSessionVersion or nil,
+        rosterVersion        = gd and gd.rosterVersion or -1,
+    })
+    if PP._debug then
+        self:Print("[Sync] Session sync requested")
+    end
+end
+
+function PP:HandleSessionSyncRequest(sender, data)
+    if not self:IsRaidLeader() then return end
+    local gk = self:GetActiveGuildKey()
+    local gd = PP.Repo.Roster:GetData(gk)
+    if not gd or not gd.activeSessionID then return end
+    -- Fast-path skip when requester is already at our state.
+    if data
+       and data.activeSessionID == gd.activeSessionID
+       and data.activeSessionVersion == gd.activeSessionVersion
+       and data.rosterVersion == gd.rosterVersion then
+        return
+    end
+    -- Cooldown gate. Always enforced: a single broadcast reply serves every
+    -- requester whose request arrives within SESSION_SYNC_COOLDOWN seconds.
+    local now = time()
+    if PP._lastSessionSyncSent and (now - PP._lastSessionSyncSent) < SESSION_SYNC_COOLDOWN then
+        if PP._debug then
+            self:Print("[Sync] Session sync suppressed (cooldown)")
+        end
+        return
+    end
+    PP._lastSessionSyncSent = now
+    -- Shallow snapshots so an in-flight loot mutation between schedule and
+    -- send doesn't corrupt the payload.
+    local pendingLoot = {}
+    for k, v in pairs(PP.pendingLoot) do pendingLoot[k] = v end
+    local completedLootKeys = {}
+    for k, v in pairs(PP._completedLootKeys) do completedLootKeys[k] = v end
+    local delay = 0.3 + math.random() * 1.2
+    self:ScheduleTimer(function()
+        if not self:IsRaidLeader() then return end
+        local gd2 = PP.Repo.Roster:GetData(gk)
+        if not gd2 or not gd2.activeSessionID then return end
+        self:SendAddonMessage(PP.MSG.SESSION_SYNC_REPLY, {
+            guildKey             = gk,
+            activeSessionID      = gd2.activeSessionID,
+            activeSessionVersion = gd2.activeSessionVersion,
+            roster               = gd2.roster,
+            rosterVersion        = gd2.rosterVersion,
+            session              = gd2.sessions[gd2.activeSessionID],
+            pendingLoot          = pendingLoot,
+            completedLootKeys    = completedLootKeys,
+            raidSettings         = {
+                autoPassEpicRolls = self.db.global.autoPassEpicRolls,
+            },
+        })
+        if PP._debug then
+            self:Print("[Sync] Session sync broadcast")
+        end
+    end, delay)
+end
+
+function PP:HandleSessionSyncReply(data, sender, distribution)
+    if not data or not data.guildKey then return end
+    -- Trust gate: sender must be current rank-2 leader in our group.
+    -- Replies are broadcast-only; whisper path was intentionally dropped.
+    local isLeader = false
+    for i = 1, GetNumGroupMembers() do
+        local name, rank = GetRaidRosterInfo(i)
+        if rank == 2 and self:GetFullName(name) == sender then
+            isLeader = true
+            break
+        end
+    end
+    if not isLeader then return end
+
+    self:_adoptSessionContext(data.guildKey, data.activeSessionID, data.activeSessionVersion)
+
+    local gd = PP.Repo.Roster:EnsureData(data.guildKey)
+    -- Roster merge: higher-version-wins
+    if data.rosterVersion and data.rosterVersion > gd.rosterVersion then
+        gd.roster        = data.roster or gd.roster
+        gd.rosterVersion = data.rosterVersion
+    end
+
+    -- Session record: install if missing, otherwise merge richer fields.
+    if data.session and data.activeSessionID
+       and not (gd.deletedSessions and gd.deletedSessions[data.activeSessionID]) then
+        local local_session = gd.sessions[data.activeSessionID]
+        if not local_session then
+            gd.sessions[data.activeSessionID] = data.session
+        else
+            local incoming = data.session
+            if incoming.items and #incoming.items > #(local_session.items or {}) then
+                local_session.items = incoming.items
+            end
+            if incoming.bosses and #incoming.bosses > #(local_session.bosses or {}) then
+                local_session.bosses = incoming.bosses
+            end
+            if incoming.endTime and not local_session.endTime then
+                local_session.endTime = incoming.endTime
+                local_session.active  = false
+            end
+        end
+    end
+
+    -- Loot merge: leader is authoritative for in-flight responses.
+    if data.pendingLoot then
+        for k, entry in pairs(data.pendingLoot) do
+            if not PP._completedLootKeys[k] then
+                PP.pendingLoot[k] = entry
+            end
+        end
+    end
+    if data.completedLootKeys then
+        for k, v in pairs(data.completedLootKeys) do
+            PP._completedLootKeys[k] = v
+        end
+    end
+    -- Catches awards we missed while offline.
+    for k in pairs(PP.pendingLoot) do
+        if PP._completedLootKeys[k] then
+            PP.pendingLoot[k] = nil
+        end
+    end
+    PP.Repo.Loot:Save()
+
+    if data.raidSettings and data.raidSettings.autoPassEpicRolls ~= nil then
+        self.db.global.autoPassEpicRolls = data.raidSettings.autoPassEpicRolls
+    end
+
+    self:RefreshLootMasterWindow()
+    self:RefreshLootResponseFrame()
+    self:RefreshMainWindow()
+
+    if PP._debug then
+        self:Print("[Sync] Session sync applied from " .. self:GetShortName(sender))
+    end
+end
+
 function PP:HandleRosterUpdate(data, sender)
     if not data or not data.guildKey then return end
     self:_adoptSessionContext(data.guildKey, data.activeSessionID, data.activeSessionVersion)
@@ -644,12 +802,7 @@ function PP:HandleRosterUpdate(data, sender)
         gd.roster        = data.roster or gd.roster
         gd.rosterVersion = data.version
         if PP._debug then
-            local match = not data.hash or ComputeRosterHash(gd.roster) == data.hash
-            local label = match and "|cFF00FF00match \226\156\147|r" or "|cFFFF4400MISMATCH \226\156\151|r"
-            self:Print("[Sync] Full roster from " .. self:GetShortName(sender) .. " (v" .. data.version .. "): hash " .. label)
-        end
-        if data.hash and ComputeRosterHash(gd.roster) ~= data.hash then
-            self:ScheduleTimer(function() self:RequestSync() end, math.random())
+            self:Print("[Sync] Full roster from " .. self:GetShortName(sender) .. " (v" .. data.version .. ")")
         end
         self:RefreshMainWindow()
     end
@@ -674,32 +827,10 @@ function PP:HandleGroupScore(data, sender)
         end
     end
     gd.rosterVersion = data.version
-    local hash = ComputeRosterHash(gd.roster)
     if PP._debug then
-        local label = "|cFFFFD100pending ACK|r"
-        self:Print("[Sync] Group score from " .. self:GetShortName(sender) .. " (v" .. data.version .. "): " .. label)
+        self:Print("[Sync] Group score from " .. self:GetShortName(sender) .. " (v" .. data.version .. ")")
     end
-    self:SendAddonMessage(PP.MSG.GROUP_SCORE_ACK, {
-        version  = data.version,
-        hash     = hash,
-        guildKey = data.guildKey,
-    }, sender)
     self:RefreshMainWindow()
-end
-
-function PP:HandleGroupScoreAck(data, sender)
-    if not data or not data.version or not data.hash then return end
-    if not PP._groupScoreHashes then return end
-    local expected = PP._groupScoreHashes[data.version]
-    if not expected then return end
-    local match = expected == data.hash
-    if PP._debug then
-        local label = match and "|cFF00FF00match \226\156\147|r" or "|cFFFF4400MISMATCH \226\156\151 \226\134\146 sending full sync|r"
-        self:Print("[Sync] Hash ACK from " .. self:GetShortName(sender) .. ": " .. label)
-    end
-    if not match and data.guildKey then
-        self:SendFullSync(data.guildKey)
-    end
 end
 
 -- Session created by an officer
@@ -707,25 +838,20 @@ function PP:HandleSessionCreate(data, sender)
     if not data or not data.raidID or not data.raid then return end
     local gk = data.guildKey or self:GetActiveGuildKey()
     local gd = PP.Repo.Roster:EnsureData(gk)
-    gd.sessions[data.raidID] = gd.sessions[data.raidID] or {
+    self:_ensureSessionRecord(gk, data.raidID, {
         name      = data.raid.name,
         startTime = data.raid.startTime,
-        guildKey  = data.guildKey,
         leader    = sender,
-        items     = {},
-        bosses    = {},
-        members   = {},
-        active    = true,
-        endTime   = nil,
-    }
+        guildKey  = data.guildKey,
+    })
     self:_adoptSessionContext(gk, data.activeSessionID or data.raidID, data.activeSessionVersion)
     -- Outside a raid, ensure _activeGuildKey is set (helper only does this when
     -- IsInRaid() to avoid clobbering a manual selection).
     if not self._activeGuildKey then self._activeGuildKey = gk end
     -- If we have no roster data yet (fresh install / cleared vars), request a
-    -- sync so the officer sends us the full roster now that a session is active.
+    -- sync so the leader sends us the full roster now that a session is active.
     if gd.rosterVersion == 0 then
-        self:ScheduleTimer(function() self:RequestSync() end, 1)
+        self:ScheduleTimer(function() self:RequestSessionSync() end, 1)
     end
     self:Print("Session started: " .. (data.raid.name or data.raidID))
     PP._completedLootKeys = {}
@@ -807,6 +933,18 @@ function PP:HandleLootPost(data, sender)
     if not data or not data.key then return end
     if PP._completedLootKeys[data.key] then return end
     self:_adoptSessionContext(data.guildKey, data.activeSessionID, data.activeSessionVersion)
+    -- Gate the popup behind a session record. A receiver who missed
+    -- SESSION_CREATE (cold join, mid-load, brief disconnect) would otherwise
+    -- show a popup and award against a phantom session. The leader carries a
+    -- minimal session shell on LOOT_POST so the joiner can install it now.
+    local installed = self:_ensureSessionRecord(data.guildKey, data.activeSessionID, data.session)
+    if not installed then
+        if PP._debug then
+            self:Print("[Sync] LOOT_POST without session context; requesting session sync")
+        end
+        self:RequestSessionSync()
+        return
+    end
     -- Store locally so we can respond
     PP.Repo.Loot:SetEntry(data.key, {
         itemLink      = data.itemLink,
@@ -838,10 +976,19 @@ function PP:HandleLootAward(data, sender)
     if not data or not data.key then return end
     if PP._completedLootKeys[data.key] then return end
     self:_adoptSessionContext(data.guildKey, data.activeSessionID, data.activeSessionVersion)
+    local sessionInstalled = self:_ensureSessionRecord(data.guildKey, data.activeSessionID, data.session)
     -- Record item in raid history for all clients. Active session has been
     -- adopted above, so PP.Session:RecordItemAward writes into the right one.
-    if data.itemLink and data.awardedTo then
+    -- If the session record could not be installed (old client + cold join),
+    -- skip RecordItemAward and pull state via session sync; the score change
+    -- below still applies because the roster table is independent.
+    if sessionInstalled and data.itemLink and data.awardedTo then
         PP.Session:RecordItemAward(data.itemLink, data.itemID, data.awardedTo, data.pointsSpent, data.response, data.key)
+    elseif not sessionInstalled then
+        if PP._debug then
+            self:Print("[Sync] LOOT_AWARD without session context; requesting session sync")
+        end
+        self:RequestSessionSync()
     end
     -- Apply score deduction to the winner
     if data.awardedTo and data.newScore ~= nil then
@@ -850,21 +997,16 @@ function PP:HandleLootAward(data, sender)
             roster[data.awardedTo].score = data.newScore
         end
     end
-    -- Advance local rosterVersion to match the loot master and verify hash.
-    -- Version + hash travel inline on LOOT_AWARD so a single message keeps
-    -- receivers in sync. A version gap or hash mismatch triggers RequestSync
-    -- which the leader answers with a full roster broadcast.
+    -- Advance local rosterVersion to match the loot master. A version gap
+    -- (missed prior broadcast) triggers RequestSessionSync; the leader replies
+    -- with the full roster + active session + live loot state.
     if data.rosterVersion and data.guildKey then
         local gd = PP.Repo.Roster:GetData(data.guildKey)
         if gd then
             if data.rosterVersion > gd.rosterVersion + 1 then
-                -- Gap: missed prior delta(s). Don't bump version; full sync will fix it.
-                self:ScheduleTimer(function() self:RequestSync() end, math.random())
+                self:ScheduleTimer(function() self:RequestSessionSync() end, math.random())
             elseif data.rosterVersion == gd.rosterVersion + 1 then
                 gd.rosterVersion = data.rosterVersion
-                if data.rosterHash and ComputeRosterHash(gd.roster) ~= data.rosterHash then
-                    self:ScheduleTimer(function() self:RequestSync() end, math.random())
-                end
             end
         end
     end

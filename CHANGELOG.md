@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.6.0] - 2026-04-30
+### Added
+- `SESSION_SYNC_REQUEST` / `SESSION_SYNC_REPLY` (`PP:RequestSessionSync`, `PP:HandleSessionSyncRequest`, `PP:HandleSessionSyncReply`): leader-only, narrow alternative to `SYNC_REQUEST` / `SYNC_FULL`. Reply carries the active guild's roster, the active session record, in-flight `pendingLoot`, and `_completedLootKeys`. Broadcast-only with a 5 s cooldown so concurrent requesters from the same burst are coalesced into a single broadcast. `SESSION_SYNC_REPLY` ships at `BULK` priority.
+- `PP:_ensureSessionRecord(guildKey, sessionID, sessionData)`: installs a minimal session shell when the local record is missing. Used by `HandleSessionCreate`, `HandleLootPost`, `HandleLootAward`, and the new `HandleSessionSyncReply`.
+- `LOOT_POST` and `LOOT_AWARD` payloads now carry a minimal `session` field (`{ name, startTime, leader, guildKey }`) so receivers who missed `SESSION_CREATE` can install a record before showing the response popup or recording an award.
+
+### Changed
+- All internal `RequestSync` callers swapped to `RequestSessionSync` (`_ScheduleJoinSync`, `CompletePendingSessionEnd`, `OnGuildRosterUpdate`, `OnPlayerEnteringWorld` ungrouped path, `HandleSessionCreate` fresh-roster trigger, and the `LOOT_AWARD` version-gap recovery in `HandleLootAward`). The Settings-tab "Request Sync" button still calls `RequestSync` / `SYNC_FULL` as the manual escape hatch for a multi-guild dump.
+- `HandleLootPost` gates the response popup behind `_ensureSessionRecord`. If the receiver missed `SESSION_CREATE` and the sender did not carry the `session` field (old client), the post is dropped and a `RequestSessionSync` is issued; the leader's reply repopulates `pendingLoot`.
+- `HandleLootAward` invokes `_ensureSessionRecord` before `RecordItemAward`. If installation fails, the score change still applies (roster is independent) but the item is not recorded into a phantom session and a `RequestSessionSync` is issued.
+
+### Removed
+- `ComputeRosterHash` and the `PP.ComputeRosterHash` export. Roster broadcasts ship the full table on every mutation alongside a strictly-monotonic `rosterVersion`; equal versions imply equal state.
+- `hash` field on `ROSTER_UPDATE` and `SYNC_REQUEST` payloads, `rosterHash` on `LOOT_AWARD` and `GROUP_SCORE`.
+- `_groupScoreHashes` cache and the `GROUP_SCORE_ACK` round-trip (`PP.MSG.GROUP_SCORE_ACK`, `HandleGroupScoreAck`). `GROUP_SCORE` itself stays — only the per-receiver acknowledgement dies. **Wire-breaking:** clients on older versions still send `GROUP_SCORE_ACK`, which new clients silently ignore (no dispatch branch).
+- Hash-mismatch recovery branches in `HandleRosterUpdate` and `HandleLootAward`. Version-gap detection on `LOOT_AWARD` is retained and now triggers `RequestSessionSync`.
+- "Roster hash:" line from the `/pp` Settings status panel.
+
 ## [0.5.1] - 2026-04-28
 ### Added
 - Roster snapshots: end-of-session standings frozen per session. Captured locally by every client on `PP.Session:End()` (skipped for `RESET` and `SYNC_DELETE`); shipped inline on `SESSION_CLOSE`; backfilled on demand via `SNAPSHOT_REQUEST` / `SNAPSHOT_REPLY` (BULK priority). `sessionSnapshots` table added to `guilds[guildKey]` schema (auto-backfilled by `EnsureData`). Arbitration by `rosterVersion` — newest wins.

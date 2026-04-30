@@ -32,9 +32,10 @@
 ---@field VERSION_REQUEST  string
 ---@field VERSION_REPLY    string
 ---@field GROUP_SCORE      string
----@field GROUP_SCORE_ACK  string
 ---@field SNAPSHOT_REQUEST string
 ---@field SNAPSHOT_REPLY   string
+---@field SESSION_SYNC_REQUEST string
+---@field SESSION_SYNC_REPLY   string
 
 ---@class PPResponseConstants
 ---@field NEED     string
@@ -302,9 +303,9 @@ function PPLootService:_CancelIdleClear() end
 ---@field _debug        boolean
 ---@field _ppUsers      table<string, boolean>|nil
 ---@field _completedLootKeys      table<string, boolean>
----@field _groupScoreHashes     table<string, number>|nil
 ---@field _lastFullSyncSent     number|nil
 ---@field _lastSyncRequestSent  number|nil
+---@field _lastSessionSyncSent  number|nil
 ---@field _lastSnapshotFetchSent number|nil
 ---@field _snapshotFetchAppliedCount number|nil
 ---@field _lootIdleTimer        any|nil
@@ -542,7 +543,6 @@ function PPAddon:WipeRetryQueue() end
 
 function PPAddon:BroadcastGroupScore(amount) end
 function PPAddon:HandleGroupScore(data, sender) end
-function PPAddon:HandleGroupScoreAck(data, sender) end
 
 ---@param sessionID string
 function PPAddon:BroadcastSessionCreate(sessionID) end
@@ -570,6 +570,23 @@ function PPAddon:HandleSyncRequest(sender, data) end
 ---@param sender       string
 ---@param distribution? string  AceComm distribution channel ("WHISPER" enforces the trust window)
 function PPAddon:HandleSyncFull(data, sender, distribution) end
+
+function PPAddon:RequestSessionSync() end
+
+---@param sender string
+---@param data   table
+function PPAddon:HandleSessionSyncRequest(sender, data) end
+
+---@param data         table
+---@param sender       string
+---@param distribution? string  AceComm distribution channel
+function PPAddon:HandleSessionSyncReply(data, sender, distribution) end
+
+---@param guildKey    string
+---@param sessionID   string
+---@param sessionData? table  minimal session shell { name, startTime, leader, guildKey }
+---@return boolean    true if a session record exists locally after the call
+function PPAddon:_ensureSessionRecord(guildKey, sessionID, sessionData) end
 
 ---@param sender string
 ---@return boolean
