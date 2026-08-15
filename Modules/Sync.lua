@@ -3,6 +3,7 @@
 ---------------------------------------------------------------------------
 ---@type PPAddon
 local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
+local LibDeflate = LibStub("LibDeflate")
 
 ---------------------------------------------------------------------------
 -- Sync state
@@ -58,14 +59,15 @@ end
 
 function PP:SendAddonMessage(msgType, data, target)
     if self._sandbox then return end
-    local payload = self:Serialize(newSalt(), msgType, data)
-    local prio    = MSG_PRIORITY[msgType] or "NORMAL"
+    local payload  = self:Serialize(newSalt(), msgType, data)
+    local encoded  = LibDeflate:EncodeForWoWAddonChannel(LibDeflate:CompressDeflate(payload, { level = 5 }))
+    local prio     = MSG_PRIORITY[msgType] or "NORMAL"
     if target then
-        self:SendCommMessage(PP.COMM_PREFIX, payload, "WHISPER", target, prio)
+        self:SendCommMessage(PP.COMM_PREFIX, encoded, "WHISPER", target, prio)
     elseif IsInRaid() then
-        self:SendCommMessage(PP.COMM_PREFIX, payload, "RAID", nil, prio)
+        self:SendCommMessage(PP.COMM_PREFIX, encoded, "RAID", nil, prio)
     elseif IsInGroup() then
-        self:SendCommMessage(PP.COMM_PREFIX, payload, "PARTY", nil, prio)
+        self:SendCommMessage(PP.COMM_PREFIX, encoded, "PARTY", nil, prio)
     end
 end
 
@@ -75,10 +77,18 @@ end
 function PP:OnCommReceived(prefix, message, distribution, sender)
     if prefix ~= PP.COMM_PREFIX then return end
 
+    -- Senders compress with LibDeflate; fall back to treating the message as
+    -- raw serialized text if decode/decompress fails, so peers still on the
+    -- pre-compression wire format (or anyone stale on the shared comm prefix)
+    -- remain readable.
+    local decoded = LibDeflate:DecodeForWoWAddonChannel(message)
+    local decompressed = decoded and LibDeflate:DecompressDeflate(decoded)
+    local wireMessage = decompressed or message
+
     -- New senders prefix payload with a salt to defeat first-byte dedupe.
     -- 3-arg shape = (salt, msgType, data); legacy 2-arg shape = (msgType, data).
     -- Disambiguate by presence of the third value.
-    local success, first, second, third = self:Deserialize(message)
+    local success, first, second, third = self:Deserialize(wireMessage)
     if not success then return end
     local msgType, data
     if third ~= nil then
@@ -881,12 +891,10 @@ function PP:HandleSessionDelete(data, sender)
 
     -- Close the detail window if it was showing the deleted session
     if self._raidDetailWindow then
-        self._raidDetailWindow:Release()
-        self._raidDetailWindow = nil
+        self._raidDetailWindow:Hide()
     end
     if self._snapshotWindow then
-        self._snapshotWindow:Release()
-        self._snapshotWindow = nil
+        self._snapshotWindow:Hide()
     end
 
     self:Print("A session record was deleted by an officer.")

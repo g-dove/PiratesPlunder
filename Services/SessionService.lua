@@ -153,8 +153,8 @@ end
 -- Moved from PP:DeleteRaid() in Raid.lua.
 ---------------------------------------------------------------------------
 function PP.Session:Delete(raidID)
-    if not PP:IsOfficerOrHigher() then
-        PP:Print("Only guild officers can delete sessions.")
+    if not PP:CanModify() then
+        PP:Print("Only officers of the active guild can delete sessions.")
         return
     end
 
@@ -183,12 +183,10 @@ function PP.Session:Delete(raidID)
 
     -- Close the detail window if it was showing this raid
     if PP._raidDetailWindow then
-        PP._raidDetailWindow:Release()
-        PP._raidDetailWindow = nil
+        PP._raidDetailWindow:Hide()
     end
     if PP._snapshotWindow then
-        PP._snapshotWindow:Release()
-        PP._snapshotWindow = nil
+        PP._snapshotWindow:Hide()
     end
 
     PP:RefreshMainWindow()

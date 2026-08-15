@@ -1,16 +1,28 @@
----------------------------------------------------------------------------
--- Pirates Plunder – Loot Distribution UI
---   1) Loot-master window  (/pploot, /ppl)  – post items, view responses, award
---   2) Unified multi-item response popup – Need / Transmog / Pass per item
----------------------------------------------------------------------------
----@type PPAddon
 local PP  = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
-local AceGUI = PP.AceGUI
+local Kit = PP.Kit
 
--- Stable sort for pending loot entries. Keys have the format
--- "itemLink:timestamp:index". Sort primarily by timestamp so order is
--- chronological across reloads; use index as a tiebreaker within the
--- same second (_lootKeyIndex resets on reload so index alone is not stable).
+local function shortItemName(link)
+    return (link and link:match("%[(.-)%]")) or link or "Unknown Item"
+end
+
+local function truncateToWidth(fontString, text, maxWidth)
+    fontString:SetText(text)
+    if fontString:GetStringWidth() <= maxWidth then return text end
+    local lo, hi = 0, #text
+    while lo < hi do
+        local mid = math.ceil((lo + hi) / 2)
+        fontString:SetText(text:sub(1, mid) .. "...")
+        if fontString:GetStringWidth() <= maxWidth then
+            lo = mid
+        else
+            hi = mid - 1
+        end
+    end
+    local result = text:sub(1, lo) .. "..."
+    fontString:SetText(result)
+    return result
+end
+
 local function lootEntrySortLess(a, b)
     local ta, ia = a.key:match(":([%d%.]+):(%d+)$")
     local tb, ib = b.key:match(":([%d%.]+):(%d+)$")
@@ -20,13 +32,23 @@ local function lootEntrySortLess(a, b)
     return ta < tb
 end
 
--- =========================================================================
---  LOOT-MASTER WINDOW
--- =========================================================================
+function PP:AddItemTooltip(frame, itemLink)
+    if not frame or not itemLink then return end
+    frame:EnableMouse(true)
+    frame:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetHyperlink(itemLink)
+        GameTooltip:Show()
+    end)
+    frame:SetScript("OnLeave", function() GameTooltip:Hide() end)
+end
 
+---------------------------------------------------------------------------
+-- Loot-master window
+---------------------------------------------------------------------------
 function PP:ToggleLootMasterWindow()
     if self.lootMasterWindow then
-        self.lootMasterWindow:Release()
+        self.lootMasterWindow:Hide()
         self.lootMasterWindow = nil
         return
     end
@@ -39,382 +61,122 @@ end
 
 function PP:RefreshLootMasterWindow()
     if not self.lootMasterWindow then return end
-    self:DrawLootMasterContent(self._lmContainer)
+    self:DrawLootMasterContent()
 end
 
 function PP:CreateLootMasterWindow()
-    local f = AceGUI:Create("Frame")
-    f:SetTitle("Pirates Plunder – Loot Master")
-    f:SetLayout("Fill")
-    f:SetWidth(850)
-    f:SetHeight(500)
-    f:SetCallback("OnClose", function(widget)
-        AceGUI:Release(widget)
+    local f = Kit:Window("Pirates Plunder - Loot Master", 860, 500)
+    f:SetOnClose(function()
+        f:Hide()
         PP.lootMasterWindow = nil
-        PP._lmContainer = nil
+        PP._lmList = nil
     end)
     self.lootMasterWindow = f
-
-    -- Make ESC close this window
     PP:RegisterEscFrame(f, "PPLootMasterFrame")
-
-    local scroll = AceGUI:Create("ScrollFrame")
-    scroll:SetFullWidth(true)
-    scroll:SetFullHeight(true)
-    scroll:SetLayout("List")
-    f:AddChild(scroll)
-    self._lmContainer = scroll
-
-    self:DrawLootMasterContent(scroll)
+    self._lmList = Kit:ScrollList(f.body)
+    self._lmList.frame:SetAllPoints(f.body)
+    self:DrawLootMasterContent()
 end
 
-function PP:DrawLootMasterContent(container)
-    if not container then return end
-    -- Save scroll position before releasing (ReleaseChildren wipes it synchronously)
-    local lmSt = container.status or container.localstatus
-    local savedLmScroll = lmSt and lmSt.scrollvalue or 0
-    container:ReleaseChildren()
+local function itemBlock(parent, item, index)
+    local block = Kit:Panel(parent)
+    local titleBar = CreateFrame("Frame", nil, block)
+    titleBar:SetPoint("TOPLEFT", block, "TOPLEFT")
+    titleBar:SetPoint("TOPRIGHT", block, "TOPRIGHT")
+    titleBar:SetHeight(20)
+    Kit:Fill(titleBar, Kit.Palette.panelLight)
+    local titleLbl = Kit:Label(titleBar, item.itemLink or "Item", "head")
+    titleLbl:SetPoint("LEFT", titleBar, "LEFT", 8, 0)
+    PP:AddItemTooltip(titleBar, item.itemLink)
+    block._titleBar = titleBar
+    block._y = -26
+    return block
+end
+
+local function blockAdd(block, widget, y, x)
+    x = x or 8
+    widget:ClearAllPoints()
+    widget:SetPoint("TOPLEFT", block, "TOPLEFT", x, block._y)
+    widget:SetPoint("TOPRIGHT", block, "TOPRIGHT", -x, block._y)
+    block._y = block._y - y
+end
+
+function PP:DrawLootMasterContent()
+    if not self.lootMasterWindow or not self._lmList then return end
+    local list = self._lmList
+    local content = list.child
+    list:Clear()
 
     local me      = self:GetPlayerFullName()
     local canPost = self:CanPostLoot()
 
-    -- ── Loot Queue ──────────────────────────────────────────────────────────
     if canPost then
-    local queueHead = AceGUI:Create("Heading")
-    queueHead:SetFullWidth(true)
-    queueHead:SetText("Loot Queue")
-    container:AddChild(queueHead)
+        list:Add(Kit:Heading(content, "Loot Queue"), 20)
+        local hint = Kit:Label(content, "|cFF888888Alt+right-click bag items, or link an item below, then click Post All.|r", "small")
+        list:Add(hint, 16)
 
-    local hintLbl = AceGUI:Create("Label")
-    hintLbl:SetFullWidth(true)
-    hintLbl:SetText("|cFF888888Alt+right-click bag items, or link an item below, then click Post All.|r")
-    container:AddChild(hintLbl)
-
-    local inputGroup = AceGUI:Create("SimpleGroup")
-    inputGroup:SetFullWidth(true)
-    inputGroup:SetLayout("Flow")
-    container:AddChild(inputGroup)
-
-    local editBox = AceGUI:Create("EditBox")
-    editBox:SetLabel("Link Item (shift-click)")
-    editBox:SetWidth(310)
-    editBox:SetCallback("OnEnterPressed", function(widget, _, text)
-        if text and text:trim() ~= "" then
-            PP:AddToLootQueue(text:trim())
-            widget:SetText("")
-        end
-    end)
-    inputGroup:AddChild(editBox)
-
-    local addBtn = AceGUI:Create("Button")
-    addBtn:SetText("Add")
-    addBtn:SetWidth(60)
-    addBtn:SetCallback("OnClick", function()
-        local text = editBox:GetText()
-        if text and text:trim() ~= "" then
-            PP:AddToLootQueue(text:trim())
-            editBox:SetText("")
-        end
-    end)
-    inputGroup:AddChild(addBtn)
-
-    local lootQueue = PP.Repo.Loot:GetQueue()
-    if #lootQueue > 0 then
-        for i, qEntry in ipairs(lootQueue) do
-            local qRow = AceGUI:Create("SimpleGroup")
-            qRow:SetFullWidth(true)
-            qRow:SetLayout("Flow")
-            container:AddChild(qRow)
-
-            local qLabel = AceGUI:Create("Label")
-            qLabel:SetText("  " .. (qEntry.itemLink or "Unknown Item"))
-            qLabel:SetWidth(420)
-            qRow:AddChild(qLabel)
-            self:AddItemTooltip(qLabel.frame, qEntry.itemLink)
-
-            local removeBtn = AceGUI:Create("Button")
-            removeBtn:SetText("Remove")
-            removeBtn:SetWidth(80)
-            local capturedIdx = i
-            removeBtn:SetCallback("OnClick", function()
-                PP:RemoveFromLootQueue(capturedIdx)
-            end)
-            qRow:AddChild(removeBtn)
-        end
-
-        local postAllBtn = AceGUI:Create("Button")
-        postAllBtn:SetText("Post All (" .. #lootQueue .. ")")
-        postAllBtn:SetWidth(130)
-        postAllBtn:SetCallback("OnClick", function()
-            PP.Loot:PostAll()
+        local inputRow = Kit:Row(content, 24)
+        local editBox
+        editBox = Kit:EditBox(inputRow, 320, function(text)
+            if text and text:trim() ~= "" then
+                PP:AddToLootQueue(text:trim())
+                editBox:SetText("")
+            end
         end)
-        container:AddChild(postAllBtn)
-    else
-        local emptyQ = AceGUI:Create("Label")
-        emptyQ:SetFullWidth(true)
-        emptyQ:SetText("|cFF888888  Queue is empty.|r")
-        container:AddChild(emptyQ)
-    end
-    end -- canPost: loot queue section
+        editBox:SetPoint("LEFT", inputRow, "LEFT", 0, 0)
+        local addBtn = Kit:Button(inputRow, "Add", function()
+            local text = editBox:GetText()
+            if text and text:trim() ~= "" then
+                PP:AddToLootQueue(text:trim())
+                editBox:SetText("")
+            end
+        end)
+        addBtn:SetSize(60, 22)
+        addBtn:SetPoint("LEFT", editBox, "RIGHT", 6, 0)
+        list:Add(inputRow, 24)
 
-    -- ── Items Being Distributed ─────────────────────────────────────────────
-    local heading = AceGUI:Create("Heading")
-    heading:SetFullWidth(true)
-    heading:SetText("Items Being Distributed")
-    container:AddChild(heading)
+        local queue = PP.Repo.Loot:GetQueue()
+        if #queue > 0 then
+            for i, qEntry in ipairs(queue) do
+                local qRow = Kit:Row(content, 22)
+                local qLbl = Kit:Label(qRow, qEntry.itemLink or "Unknown Item", "body")
+                qLbl:SetPoint("LEFT", qRow, "LEFT", 0, 0)
+                PP:AddItemTooltip(qRow, qEntry.itemLink)
+                local rmBtn = Kit:Button(qRow, "Remove", function() PP:RemoveFromLootQueue(i) end)
+                rmBtn:SetSize(80, 20)
+                rmBtn:SetPoint("RIGHT", qRow, "RIGHT", 0, 0)
+                list:Add(qRow, 22)
+            end
+            local postAllBtn = Kit:Button(content, "Post All (" .. #queue .. ")", function()
+                PP.Loot:PostAll()
+            end)
+            postAllBtn:SetSize(130, 22)
+            list:Add(postAllBtn, 22, 14, false)
+        else
+            list:Add(Kit:Label(content, "|cFF888888Queue is empty.|r", "small"), 16, 14)
+        end
+    end
+
+    list:Add(Kit:Heading(content, "Items Being Distributed"), 20)
 
     local pending = self:GetPendingLootList()
     table.sort(pending, lootEntrySortLess)
 
     if #pending == 0 then
-        local empty = AceGUI:Create("Label")
-        empty:SetFullWidth(true)
-        empty:SetText("\n  No items currently being distributed.")
-        container:AddChild(empty)
+        list:Add(Kit:Label(content, "No items currently being distributed.", "small"), 20)
     end
 
-    for _, item in ipairs(pending) do
-        -- Item header with tooltip support
-        local itemGroup = AceGUI:Create("InlineGroup")
-        itemGroup:SetFullWidth(true)
-        itemGroup:SetTitle(item.itemLink or "Item")
-        itemGroup:SetLayout("List")
-        container:AddChild(itemGroup)
-
-        -- Tooltip only when hovering the item name in the title bar
-        local titleOverlay = itemGroup.frame._ppOverlay
-        if not titleOverlay then
-            titleOverlay = CreateFrame("Frame", nil, itemGroup.frame)
-            titleOverlay:SetHeight(18)
-            itemGroup.frame._ppOverlay = titleOverlay
-        end
-        titleOverlay:ClearAllPoints()
-        titleOverlay:SetPoint("TOPLEFT",  itemGroup.frame, "TOPLEFT",  14, -1)
-        titleOverlay:SetPoint("TOPRIGHT", itemGroup.frame, "TOPRIGHT", -14, -1)
-        titleOverlay:Show()
-        self:AddItemTooltip(titleOverlay, item.itemLink)
-
-        -- Response count info
-        local infoRow = AceGUI:Create("SimpleGroup")
-        infoRow:SetFullWidth(true)
-        infoRow:SetLayout("Flow")
-        itemGroup:AddChild(infoRow)
-
-        local allowTmogGlobal = PP.db.global.allowTransmogRolls ~= false
-        local countLabel = AceGUI:Create("Label")
-        countLabel:SetText("Responses: " .. item.responseCount .. "  |  By: " .. self:GetShortName(item.postedBy)
-            .. "  |  Transmog: " .. (allowTmogGlobal and "|cFF00FF00ON|r" or "|cFFFF4400OFF|r"))
-        countLabel:SetFullWidth(true)
-        infoRow:AddChild(countLabel)
-
-        -- Response list (sorted)
+    local allowTmogGlobal = PP.db.global.allowTransmogRolls ~= false
+    for idx, item in ipairs(pending) do
         local responses = self:GetSortedResponses(item.key)
-
-        if #responses > 0 then
-            -- Column headers
-            local hdrRow = AceGUI:Create("SimpleGroup")
-            hdrRow:SetFullWidth(true)
-            hdrRow:SetLayout("Flow")
-            itemGroup:AddChild(hdrRow)
-
-            local rh1 = AceGUI:Create("Label")
-            rh1:SetText("|cFFFFD100#|r")
-            rh1:SetWidth(25)
-            hdrRow:AddChild(rh1)
-
-            local rh2 = AceGUI:Create("Label")
-            rh2:SetText("|cFFFFD100Player|r")
-            rh2:SetWidth(140)
-            hdrRow:AddChild(rh2)
-
-            local rh3 = AceGUI:Create("Label")
-            rh3:SetText("|cFFFFD100Score|r")
-            rh3:SetWidth(50)
-            hdrRow:AddChild(rh3)
-
-            local rh4 = AceGUI:Create("Label")
-            rh4:SetText("|cFFFFD100Roll|r")
-            rh4:SetWidth(45)
-            hdrRow:AddChild(rh4)
-
-            local rh5 = AceGUI:Create("Label")
-            rh5:SetText("|cFFFFD100Response|r")
-            rh5:SetWidth(90)
-            hdrRow:AddChild(rh5)
-
-            local rh6 = AceGUI:Create("Label")
-            rh6:SetText("|cFFFFD100Equipped|r")
-            rh6:SetWidth(130)
-            hdrRow:AddChild(rh6)
-
-            local rh7 = AceGUI:Create("Label")
-            rh7:SetText("|cFFFFD100Votes|r")
-            rh7:SetWidth(55)
-            hdrRow:AddChild(rh7)
-
-            for rIdx, resp in ipairs(responses) do
-                local rRow = AceGUI:Create("SimpleGroup")
-                rRow:SetFullWidth(true)
-                rRow:SetLayout("Flow")
-                itemGroup:AddChild(rRow)
-
-                local rl1 = AceGUI:Create("Label")
-                rl1:SetText(tostring(rIdx))
-                rl1:SetWidth(25)
-                rRow:AddChild(rl1)
-
-                local rl2 = AceGUI:Create("Label")
-                rl2:SetText(resp.name)
-                rl2:SetWidth(140)
-                rRow:AddChild(rl2)
-
-                local rl3 = AceGUI:Create("Label")
-                rl3:SetText("|cFFFFFF00" .. tostring(resp.score) .. "|r")
-                rl3:SetWidth(50)
-                rRow:AddChild(rl3)
-
-                local rl4 = AceGUI:Create("Label")
-                rl4:SetText(tostring(resp.roll))
-                rl4:SetWidth(45)
-                rRow:AddChild(rl4)
-
-                local respColor = resp.response == PP.RESPONSE.NEED    and "|cFF00FF00"
-                               or resp.response == PP.RESPONSE.MINOR   and "|cFF00CCFF"
-                               or "|cFFFF8800"
-                local rl5 = AceGUI:Create("Label")
-                rl5:SetText(respColor .. resp.response .. "|r")
-                rl5:SetWidth(90)
-                rRow:AddChild(rl5)
-
-                -- Equipped item comparison (NEED / MINOR only)
-                -- Icons for each equipped item with individual tooltips.
-                -- ilvl diff is computed here from the item being distributed
-                -- vs each equipped link, so it never travels in messages.
-                local hasComp = resp.equippedLinks ~= nil
-                if hasComp then
-                    local compGroup = AceGUI:Create("SimpleGroup")
-                    compGroup:SetLayout("Flow")
-                    compGroup:SetWidth(130)
-                    compGroup.frame:EnableMouse(false)
-                    rRow:AddChild(compGroup)
-
-                    -- Compute best ilvl diff locally from the distributed item
-                    local _, _, _, newIlvl = C_Item.GetItemInfo(item.itemLink)
-                    local bestDiff = nil
-                    if newIlvl and #resp.equippedLinks > 0 then
-                        for _, eLink in ipairs(resp.equippedLinks) do
-                            local _, _, _, eIlvl = C_Item.GetItemInfo(eLink)
-                            if eIlvl then
-                                local d = newIlvl - eIlvl
-                                if bestDiff == nil or d > bestDiff then bestDiff = d end
-                            end
-                        end
-                    end
-
-                    -- One icon per equipped item, each with its own tooltip
-                    for _, eLink in ipairs(resp.equippedLinks) do
-                        local _, _, _, _, _, _, _, _, _, tex = C_Item.GetItemInfo(eLink)
-                        local iconLbl = AceGUI:Create("Label")
-                        iconLbl:SetWidth(20)
-                        iconLbl:SetText(tex and ("|T" .. tex .. ":16:16|t") or "")
-                        local capturedLink = eLink
-                        iconLbl.frame:EnableMouse(true)
-                        iconLbl.frame:SetScript("OnEnter", function(f)
-                            GameTooltip:SetOwner(f, "ANCHOR_CURSOR")
-                            GameTooltip:SetHyperlink(capturedLink)
-                            GameTooltip:Show()
-                        end)
-                        iconLbl.frame:SetScript("OnLeave", function()
-                            GameTooltip:Hide()
-                        end)
-                        compGroup:AddChild(iconLbl)
-                    end
-
-                    local diffLbl = AceGUI:Create("Label")
-                    if bestDiff ~= nil then
-                        local color = bestDiff > 0 and "|cFF00FF00"
-                                   or bestDiff < 0 and "|cFFFF4444"
-                                   or "|cFFAAAAAA"
-                        local sign = bestDiff > 0 and "+" or ""
-                        diffLbl:SetText(color .. sign .. bestDiff .. " ilvl|r")
-                    else
-                        diffLbl:SetText("|cFFAAAAAA(empty)|r")
-                    end
-                    diffLbl:SetWidth(70)
-                    compGroup:AddChild(diffLbl)
-                else
-                    -- No comparison data: add a fixed-width spacer label so columns stay aligned
-                    local spacer = AceGUI:Create("Label")
-                    spacer:SetWidth(130)
-                    spacer:SetText("")
-                    rRow:AddChild(spacer)
-                end
-
-                -- Vote tally for this responder
-                local voteCount = resp.voteCount or 0
-                local voteCountLbl = AceGUI:Create("Label")
-                voteCountLbl:SetText(voteCount > 0
-                    and "|cFFFFD100" .. voteCount .. "|r"
-                    or  "|cFF888888-|r")
-                voteCountLbl:SetWidth(55)
-                rRow:AddChild(voteCountLbl)
-
-                -- Action buttons: poster gets Award / Free; observers get Vote
-                local capturedKey  = item.key
-                local capturedName = resp.fullName
-                if item.postedBy == me then
-                    local awardBtn = AceGUI:Create("Button")
-                    awardBtn:SetText("Award")
-                    awardBtn:SetWidth(70)
-                    awardBtn:SetCallback("OnClick", function()
-                        PP.Loot:Award(capturedKey, capturedName)
-                    end)
-                    rRow:AddChild(awardBtn)
-
-                    local freeBtn = AceGUI:Create("Button")
-                    freeBtn:SetText("|cFF00FF00Free|r")
-                    freeBtn:SetWidth(60)
-                    freeBtn:SetCallback("OnClick", function()
-                        PP.Loot:Award(capturedKey, capturedName, true)
-                    end)
-                    rRow:AddChild(freeBtn)
-
-                    local lootEntry = PP.Repo.Loot:GetEntry(item.key)
-                    local myVote    = lootEntry and lootEntry.votes and lootEntry.votes[me]
-                    local votedThis = myVote == resp.fullName
-                    local voteBtn = AceGUI:Create("Button")
-                    voteBtn:SetWidth(65)
-                    voteBtn:SetText(votedThis and "|cFF00FF00Vote|r" or "Vote")
-                    voteBtn:SetCallback("OnClick", function()
-                        PP:CastVote(capturedKey, capturedName)
-                    end)
-                    rRow:AddChild(voteBtn)
-                else
-                    -- Observer (officer / RL who didn't post this item): one vote per item
-                    local lootEntry = PP.Repo.Loot:GetEntry(item.key)
-                    local myVote    = lootEntry and lootEntry.votes and lootEntry.votes[me]
-                    local votedThis = myVote == resp.fullName
-                    local voteBtn = AceGUI:Create("Button")
-                    voteBtn:SetWidth(65)
-                    voteBtn:SetText(votedThis and "|cFF00FF00Vote|r" or "Vote")
-                    voteBtn:SetCallback("OnClick", function()
-                        PP:CastVote(capturedKey, capturedName)
-                    end)
-                    rRow:AddChild(voteBtn)
-                end
-            end
-        else
-            local noResp = AceGUI:Create("Label")
-            noResp:SetFullWidth(true)
-            noResp:SetText("  Waiting for responses...")
-            itemGroup:AddChild(noResp)
-        end
-
-        -- Who in the raid hasn't responded yet (also works in sandbox)
+        local rowCount = math.max(#responses, 1)
+        local blockH = 26 + 20 + 4 + (#responses > 0 and 20 or 0) + rowCount * 22 + 24
+        local extra = 0
+        local raidSet, nonResponders = nil, nil
         if IsInRaid() or PP:IsSandbox() then
-            local raidSet = PP.Roster:GetRaidMemberSet()
+            raidSet = PP.Roster:GetRaidMemberSet()
             local lootEntry = PP.Repo.Loot:GetEntry(item.key)
-            local nonResponders = {}
+            nonResponders = {}
             if lootEntry then
                 for fullName in pairs(raidSet) do
                     if not lootEntry.responses[fullName] then
@@ -422,117 +184,165 @@ function PP:DrawLootMasterContent(container)
                     end
                 end
             end
+            if #nonResponders > 0 or next(raidSet) then extra = extra + 18 end
+        end
+        if item.postedBy == me then extra = extra + 26 end
+        blockH = blockH + extra
+
+        local block = itemBlock(content, item, idx)
+
+        local infoLbl = Kit:Label(block, "Responses: " .. item.responseCount .. "  |  By: "
+            .. self:GetShortName(item.postedBy) .. "  |  Transmog: "
+            .. (allowTmogGlobal and "|cFF00FF00ON|r" or "|cFFFF4400OFF|r"), "small")
+        blockAdd(block, infoLbl, 20)
+
+        if #responses > 0 then
+            local hdr = Kit:Row(block, 18)
+            local cols = { {t="#",w=25}, {t="Player",w=140}, {t="Score",w=50}, {t="Roll",w=45}, {t="Response",w=90}, {t="Equipped",w=130}, {t="Votes",w=55} }
+            local x = 0
+            for _, c in ipairs(cols) do
+                local l = Kit:Label(hdr, c.t, "small")
+                l:SetTextColor(Kit.Palette.accent[1], Kit.Palette.accent[2], Kit.Palette.accent[3])
+                l:SetPoint("LEFT", hdr, "LEFT", x, 0)
+                x = x + c.w
+            end
+            blockAdd(block, hdr, 20)
+
+            for rIdx, resp in ipairs(responses) do
+                local row = Kit:Row(block, 22)
+                Kit:Label(row, tostring(rIdx), "small"):SetPoint("LEFT", row, "LEFT", 0, 0)
+                Kit:Label(row, resp.name, "small"):SetPoint("LEFT", row, "LEFT", 25, 0)
+                Kit:Label(row, "|cFFFFFF00" .. resp.score .. "|r", "small"):SetPoint("LEFT", row, "LEFT", 165, 0)
+                Kit:Label(row, tostring(resp.roll), "small"):SetPoint("LEFT", row, "LEFT", 215, 0)
+                local respColor = resp.response == PP.RESPONSE.NEED and "|cFF00FF00"
+                               or resp.response == PP.RESPONSE.MINOR and "|cFF00CCFF" or "|cFFFF8800"
+                Kit:Label(row, respColor .. resp.response .. "|r", "small"):SetPoint("LEFT", row, "LEFT", 260, 0)
+
+                if resp.equippedLinks then
+                    local _, _, _, newIlvl = C_Item.GetItemInfo(item.itemLink)
+                    local bestDiff = nil
+                    local ix = 350
+                    for _, eLink in ipairs(resp.equippedLinks) do
+                        local _, _, _, eIlvl, _, _, _, _, _, tex = C_Item.GetItemInfo(eLink)
+                        if eIlvl and newIlvl then
+                            local d = newIlvl - eIlvl
+                            if bestDiff == nil or d > bestDiff then bestDiff = d end
+                        end
+                        local icon = row:CreateTexture(nil, "OVERLAY")
+                        icon:SetSize(16, 16)
+                        icon:SetPoint("LEFT", row, "LEFT", ix, 0)
+                        if tex then icon:SetTexture(tex) end
+                        local capturedLink = eLink
+                        local hover = CreateFrame("Frame", nil, row)
+                        hover:SetAllPoints(icon)
+                        PP:AddItemTooltip(hover, capturedLink)
+                        ix = ix + 18
+                    end
+                    local diffLbl
+                    if bestDiff ~= nil then
+                        local color = bestDiff > 0 and "|cFF00FF00" or bestDiff < 0 and "|cFFFF4444" or "|cFFAAAAAA"
+                        diffLbl = Kit:Label(row, color .. (bestDiff > 0 and "+" or "") .. bestDiff .. " ilvl|r", "small")
+                    else
+                        diffLbl = Kit:Label(row, "|cFFAAAAAA(empty)|r", "small")
+                    end
+                    diffLbl:SetPoint("LEFT", row, "LEFT", 400, 0)
+                end
+
+                local voteCount = resp.voteCount or 0
+                Kit:Label(row, voteCount > 0 and ("|cFFFFD100" .. voteCount .. "|r") or "|cFF888888-|r", "small")
+                    :SetPoint("LEFT", row, "LEFT", 480, 0)
+
+                local capturedKey, capturedName = item.key, resp.fullName
+                if item.postedBy == me then
+                    local awardBtn = Kit:Button(row, "Award", function() PP.Loot:Award(capturedKey, capturedName) end)
+                    awardBtn:SetSize(60, 20)
+                    awardBtn:SetPoint("LEFT", row, "LEFT", 520, 0)
+                    local freeBtn = Kit:Button(row, "Free", function() PP.Loot:Award(capturedKey, capturedName, true) end)
+                    freeBtn:SetSize(50, 20)
+                    freeBtn:SetPoint("LEFT", awardBtn, "RIGHT", 4, 0)
+                    local lootEntry = PP.Repo.Loot:GetEntry(item.key)
+                    local votedThis = lootEntry and lootEntry.votes and lootEntry.votes[me] == resp.fullName
+                    local voteBtn = Kit:Button(row, votedThis and "|cFF00FF00Vote|r" or "Vote", function()
+                        PP:CastVote(capturedKey, capturedName)
+                    end)
+                    voteBtn:SetSize(55, 20)
+                    voteBtn:SetPoint("LEFT", freeBtn, "RIGHT", 4, 0)
+                else
+                    local lootEntry = PP.Repo.Loot:GetEntry(item.key)
+                    local votedThis = lootEntry and lootEntry.votes and lootEntry.votes[me] == resp.fullName
+                    local voteBtn = Kit:Button(row, votedThis and "|cFF00FF00Vote|r" or "Vote", function()
+                        PP:CastVote(capturedKey, capturedName)
+                    end)
+                    voteBtn:SetSize(55, 20)
+                    voteBtn:SetPoint("LEFT", row, "LEFT", 520, 0)
+                end
+
+                blockAdd(block, row, 22)
+            end
+        else
+            local waiting = Kit:Label(block, "Waiting for responses...", "small")
+            blockAdd(block, waiting, 20)
+        end
+
+        if raidSet then
             if #nonResponders > 0 then
                 table.sort(nonResponders)
-                local waitLabel = AceGUI:Create("Label")
-                waitLabel:SetFullWidth(true)
-                waitLabel:SetText("|cFFFFAA00Waiting: |r" .. table.concat(nonResponders, ", "))
-                itemGroup:AddChild(waitLabel)
-            elseif lootEntry and next(raidSet) then
-                local allLabel = AceGUI:Create("Label")
-                allLabel:SetFullWidth(true)
-                allLabel:SetText("|cFF00FF00All raid members have responded.|r")
-                itemGroup:AddChild(allLabel)
+                local w = Kit:Label(block, "|cFFFFAA00Waiting: |r" .. table.concat(nonResponders, ", "), "small")
+                blockAdd(block, w, 18)
+            elseif next(raidSet) then
+                local w = Kit:Label(block, "|cFF00FF00All raid members have responded.|r", "small")
+                blockAdd(block, w, 18)
             end
         end
 
-        -- Cancel button (poster only)
         if item.postedBy == me then
-            local cancelBtn = AceGUI:Create("Button")
-            cancelBtn:SetText("Cancel")
-            cancelBtn:SetWidth(80)
-            local capturedItemKey = item.key
-            cancelBtn:SetCallback("OnClick", function()
-                PP.Loot:Cancel(capturedItemKey)
-            end)
-            itemGroup:AddChild(cancelBtn)
+            local cancelBtn = Kit:Button(block, "Cancel", function() PP.Loot:Cancel(item.key) end, "danger")
+            cancelBtn:SetSize(80, 20)
+            blockAdd(block, cancelBtn, 24)
         end
+
+        block:SetHeight(-block._y + 6)
+        list:Add(block, -block._y + 6, 8)
     end
 
-    -- Pending trades section with clear buttons (poster's view only)
     local pendingTrades = PP.Repo.Loot:GetPendingTrades()
     if canPost and #pendingTrades > 0 then
-        local tradeHead = AceGUI:Create("Heading")
-        tradeHead:SetFullWidth(true)
-        tradeHead:SetText("Pending Trades")
-        container:AddChild(tradeHead)
-
+        list:Add(Kit:Heading(content, "Pending Trades"), 20)
         for tIdx, trade in ipairs(pendingTrades) do
-            local tRow = AceGUI:Create("SimpleGroup")
-            tRow:SetFullWidth(true)
-            tRow:SetLayout("Flow")
-            container:AddChild(tRow)
-
-            local tLabel = AceGUI:Create("Label")
-            tLabel:SetText("  " .. (trade.itemLink or "Item") .. "  ->  " .. self:GetShortName(trade.awardedTo))
-            tLabel:SetWidth(450)
-            tRow:AddChild(tLabel)
-
-            -- Tooltip on trade label
-            self:AddItemTooltip(tLabel.frame, trade.itemLink)
-
-            local clearBtn = AceGUI:Create("Button")
-            clearBtn:SetText("Clear")
-            clearBtn:SetWidth(80)
-            local capturedIdx = tIdx
-            clearBtn:SetCallback("OnClick", function()
-                PP.Repo.Loot:RemovePendingTrade(capturedIdx)
+            local tRow = Kit:Row(content, 22)
+            local tLbl = Kit:Label(tRow, (trade.itemLink or "Item") .. "  -> " .. self:GetShortName(trade.awardedTo), "body")
+            tLbl:SetPoint("LEFT", tRow, "LEFT", 0, 0)
+            PP:AddItemTooltip(tRow, trade.itemLink)
+            local clearBtn = Kit:Button(tRow, "Clear", function()
+                PP.Repo.Loot:RemovePendingTrade(tIdx)
                 PP:RefreshLootMasterWindow()
             end)
-            tRow:AddChild(clearBtn)
+            clearBtn:SetSize(80, 20)
+            clearBtn:SetPoint("RIGHT", tRow, "RIGHT", 0, 0)
+            list:Add(tRow, 22)
         end
-
-        local clearAllBtn = AceGUI:Create("Button")
-        clearAllBtn:SetText("Clear All Trades")
-        clearAllBtn:SetWidth(140)
-        clearAllBtn:SetCallback("OnClick", function()
+        local clearAllBtn = Kit:Button(content, "Clear All Trades", function()
             wipe(PP.Repo.Loot:GetPendingTrades())
             PP.Repo.Loot:Save()
             PP:RefreshLootMasterWindow()
         end)
-        container:AddChild(clearAllBtn)
+        clearAllBtn:SetSize(140, 22)
+        list:Add(clearAllBtn, 22, 6, false)
     end
 
-    -- Force the ScrollFrame to recalculate its scroll height after all
-    -- children (including nested InlineGroups) have been laid out.
-    container:DoLayout()
-    -- Restore scroll position after layout settles
-    if savedLmScroll > 0 then
-        C_Timer.After(0, function() if container.SetScroll then container:SetScroll(savedLmScroll) end end)
-    end
+    list:Layout()
 end
 
--- =========================================================================
---  ITEM TOOLTIP HELPER
--- =========================================================================
-function PP:AddItemTooltip(frame, itemLink)
-    if not frame or not itemLink then return end
-    frame:EnableMouse(true)
-    frame:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetHyperlink(itemLink)
-        GameTooltip:Show()
-    end)
-    frame:SetScript("OnLeave", function()
-        GameTooltip:Hide()
-    end)
-end
-
--- =========================================================================
---  UNIFIED MULTI-ITEM RESPONSE FRAME
---  Shows ALL pending loot items. Players can respond or change their
---  response. New items are added dynamically. NOT dismissed by ESC.
--- =========================================================================
-
+---------------------------------------------------------------------------
+-- Unified multi-item response popup
+---------------------------------------------------------------------------
 function PP:ShowLootResponseFrame()
-    -- Bail out early if there is nothing to show
     local hasItems = false
     for _, entry in pairs(PP.Repo.Loot:GetAll()) do
         if not entry.awarded then hasItems = true; break end
     end
     if not hasItems then return end
 
-    -- Always hide bars first, regardless of whether the frame already exists
     self:HideLootBars()
 
     if self.lootResponseFrame then
@@ -542,7 +352,7 @@ function PP:ShowLootResponseFrame()
     end
 
     local f = CreateFrame("Frame", "PPLootResponseFrame", UIParent, "BackdropTemplate")
-    f:SetSize(370, 80) -- grows dynamically
+    f:SetSize(370, 80)
     f:SetPoint("TOP", UIParent, "TOP", 0, -100)
     f:SetFrameStrata("DIALOG")
     f:SetClampedToScreen(true)
@@ -551,44 +361,32 @@ function PP:ShowLootResponseFrame()
     f:RegisterForDrag("LeftButton")
     f:SetScript("OnDragStart", f.StartMoving)
     f:SetScript("OnDragStop", f.StopMovingOrSizing)
-    f:SetBackdrop({
-        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
-        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-        tile     = true,
-        tileSize = 32,
-        edgeSize = 24,
-        insets   = { left = 6, right = 6, top = 6, bottom = 6 },
-    })
-    f:SetBackdropColor(0, 0, 0, 0.92)
+    Kit:Fill(f, Kit.Palette.backdrop)
+    f:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+    f:SetBackdropBorderColor(Kit.Palette.border[1], Kit.Palette.border[2], Kit.Palette.border[3], 1)
 
-    -- Add to UISpecialFrames so ESC hides the frame
     tinsert(UISpecialFrames, "PPLootResponseFrame")
 
-    -- When the frame is hidden (by ESC or the X button), show the loot bars.
-    -- _suppressLootBars suppresses this for programmatic hides (teardown paths).
     f:SetScript("OnHide", function()
-        if not PP._suppressLootBars then
-            PP:ShowLootBars()
-        end
+        if not PP._suppressLootBars then PP:ShowLootBars() end
     end)
 
-    -- Title
-    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    title:SetPoint("TOP", 0, -10)
-    title:SetText("|cFF33CCFF[Pirates Plunder]|r Loot")
-    f._title = title
+    local title = f:CreateFontString(nil, "OVERLAY", "PPFontHead")
+    title:SetPoint("TOP", 0, -8)
+    title:SetText("Pirates Plunder - Loot")
+    title:SetTextColor(Kit.Palette.accent[1], Kit.Palette.accent[2], Kit.Palette.accent[3])
 
-    -- Close / minimize button (top right X)
-    local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
-    closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -2, -2)
-    closeBtn:SetScript("OnClick", function()
-        f:Hide()
-        -- OnHide script fires on Hide() and calls ShowLootReopenButton()
-    end)
+    local closeBtn = CreateFrame("Button", nil, f)
+    closeBtn:SetSize(18, 18)
+    closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -4, -4)
+    local closeLbl = closeBtn:CreateFontString(nil, "OVERLAY", "PPFontBody")
+    closeLbl:SetAllPoints(closeBtn)
+    closeLbl:SetText("x")
+    closeLbl:SetTextColor(Kit.Palette.textDim[1], Kit.Palette.textDim[2], Kit.Palette.textDim[3])
+    closeBtn:SetScript("OnClick", function() f:Hide() end)
 
-    -- Scroll-child container for item rows
     f._itemContainer = CreateFrame("Frame", nil, f)
-    f._itemContainer:SetPoint("TOPLEFT", f, "TOPLEFT", 12, -32)
+    f._itemContainer:SetPoint("TOPLEFT", f, "TOPLEFT", 12, -30)
     f._itemContainer:SetPoint("RIGHT", f, "RIGHT", -12, 0)
     f._itemContainer:SetHeight(1)
 
@@ -602,46 +400,29 @@ function PP:RefreshLootResponseFrame()
     if not f then return end
 
     local container = f._itemContainer
-    -- Clear old children
     local kids = { container:GetChildren() }
-    for _, child in ipairs(kids) do
-        child:Hide()
-        child:SetParent(nil)
-    end
+    for _, child in ipairs(kids) do child:Hide(); child:SetParent(nil) end
 
     local me = self:GetPlayerFullName()
     local yOffset = 0
     local btnWidth, btnHeight = 72, 20
-    local iconPad    = 8     -- left padding before the icon
-    local iconWidth  = 28
-    local textGap    = 4     -- gap between icon right edge and text start
-    local textX      = iconPad + iconWidth + textGap  -- 40
-    local textH      = 30    -- fixed text zone height (fits ~2 wrapped lines)
-    local btnGap     = 4     -- vertical gap between text zone and buttons
-    local rowPadBot  = 6     -- bottom padding per row
-    local rowHeight  = textH + btnGap + btnHeight + rowPadBot  -- 60
-    local itemCount  = 0
+    local iconPad, iconWidth, textGap = 8, 28, 4
+    local textX = iconPad + iconWidth + textGap
+    local textH, btnGap, rowPadBot = 30, 4, 6
+    local rowHeight = textH + btnGap + btnHeight + rowPadBot
+    local itemCount = 0
 
-    -- Frame width depends on whether any pending item has transmog enabled.
-    -- We check the individual entry flags (synced from the poster) rather than
-    -- the local setting, which may differ from the raid leader's.
     local anyTmog = false
     for _, entry in pairs(PP.Repo.Loot:GetAll()) do
-        if not entry.awarded and entry.allowTransmog ~= false then
-            anyTmog = true
-            break
-        end
+        if not entry.awarded and entry.allowTransmog ~= false then anyTmog = true; break end
     end
     local numBtns = anyTmog and 4 or 3
     local contentWidth = textX + numBtns * btnWidth + (numBtns - 1) * 6
-    local frameWidth   = contentWidth + iconPad + 24   -- matching right margin
-    f:SetWidth(frameWidth)
+    f:SetWidth(contentWidth + iconPad + 24)
 
     local allEntries = {}
     for key, entry in pairs(PP.Repo.Loot:GetAll()) do
-        if not entry.awarded then
-            allEntries[#allEntries + 1] = { key = key, entry = entry }
-        end
+        if not entry.awarded then allEntries[#allEntries + 1] = { key = key, entry = entry } end
     end
     table.sort(allEntries, lootEntrySortLess)
 
@@ -650,12 +431,10 @@ function PP:RefreshLootResponseFrame()
         itemCount = itemCount + 1
         local myResponse = entry.responses[me] and entry.responses[me].response or nil
 
-        -- Row frame for this item
         local row = CreateFrame("Frame", nil, container)
         row:SetSize(contentWidth, rowHeight)
         row:SetPoint("TOPLEFT", container, "TOPLEFT", 0, -yOffset)
 
-        -- Item icon (with left padding)
         local iconTex = (entry.itemID and C_Item.GetItemIconByID(entry.itemID))
         if not iconTex and entry.itemLink then
             local _, _, _, _, tex = GetItemInfoInstant(entry.itemLink)
@@ -669,8 +448,7 @@ function PP:RefreshLootResponseFrame()
             icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
         end
 
-        -- Item text: fixed height so buttons always sit below it
-        local itemText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        local itemText = row:CreateFontString(nil, "OVERLAY", "PPFontBody")
         itemText:SetPoint("TOPLEFT", row, "TOPLEFT", textX, 0)
         itemText:SetWidth(contentWidth - textX)
         itemText:SetHeight(textH)
@@ -678,81 +456,38 @@ function PP:RefreshLootResponseFrame()
         itemText:SetJustifyV("TOP")
         local displayText = entry.itemLink or "Unknown Item"
         if myResponse then
-            local color = myResponse == PP.RESPONSE.NEED     and "|cFF00FF00"
-                       or myResponse == PP.RESPONSE.MINOR    and "|cFF00CCFF"
-                       or myResponse == PP.RESPONSE.TRANSMOG and "|cFFFF8800"
-                       or "|cFF888888"
+            local color = myResponse == PP.RESPONSE.NEED and "|cFF00FF00"
+                       or myResponse == PP.RESPONSE.MINOR and "|cFF00CCFF"
+                       or myResponse == PP.RESPONSE.TRANSMOG and "|cFFFF8800" or "|cFF888888"
             displayText = displayText .. "  " .. color .. "[" .. myResponse .. "]|r"
         end
         itemText:SetText(displayText)
+        PP:AddItemTooltip(row, entry.itemLink)
 
-        -- Tooltip on the item row
-        row:EnableMouse(true)
-        row:SetScript("OnEnter", function(self)
-            if entry.itemLink then
-                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-                GameTooltip:SetHyperlink(entry.itemLink)
-                GameTooltip:Show()
-            end
-        end)
-        row:SetScript("OnLeave", function() GameTooltip:Hide() end)
-
-        -- Response buttons: anchored below the fixed text zone, never overlap it
         local btnY = -(textH + btnGap)
         local capturedKey = key
 
-        local needBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+        local needBtn = Kit:Button(row, "Need", function() PP.Loot:SubmitResponse(capturedKey, PP.RESPONSE.NEED) end)
         needBtn:SetSize(btnWidth, btnHeight)
         needBtn:SetPoint("TOPLEFT", row, "TOPLEFT", textX, btnY)
-        needBtn:SetText("Need")
-        if myResponse == PP.RESPONSE.NEED then
-            needBtn:GetFontString():SetTextColor(0, 1, 0)
-        end
-        needBtn:SetScript("OnClick", function()
-            PP.Loot:SubmitResponse(capturedKey, PP.RESPONSE.NEED)
-        end)
+        if myResponse == PP.RESPONSE.NEED then needBtn.GetFontString(needBtn):SetTextColor(0, 1, 0) end
 
-        local minorBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+        local minorBtn = Kit:Button(row, "Minor", function() PP.Loot:SubmitResponse(capturedKey, PP.RESPONSE.MINOR) end)
         minorBtn:SetSize(btnWidth, btnHeight)
         minorBtn:SetPoint("LEFT", needBtn, "RIGHT", 6, 0)
-        minorBtn:SetText("Minor")
-        if myResponse == PP.RESPONSE.MINOR then
-            minorBtn:GetFontString():SetTextColor(0, 0.8, 1)
-        end
-        minorBtn:SetScript("OnClick", function()
-            PP.Loot:SubmitResponse(capturedKey, PP.RESPONSE.MINOR)
-        end)
+        if myResponse == PP.RESPONSE.MINOR then minorBtn.GetFontString(minorBtn):SetTextColor(0, 0.8, 1) end
 
         local showTmog = entry.allowTransmog ~= false
-
-        local tmogBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+        local tmogBtn = Kit:Button(row, "Transmog", function() PP.Loot:SubmitResponse(capturedKey, PP.RESPONSE.TRANSMOG) end)
         tmogBtn:SetSize(btnWidth, btnHeight)
         tmogBtn:SetPoint("LEFT", minorBtn, "RIGHT", 6, 0)
-        tmogBtn:SetText("Transmog")
-        if myResponse == PP.RESPONSE.TRANSMOG then
-            tmogBtn:GetFontString():SetTextColor(1, 0.53, 0)
-        end
-        if not showTmog then
-            tmogBtn:Hide()
-        end
-        tmogBtn:SetScript("OnClick", function()
-            PP.Loot:SubmitResponse(capturedKey, PP.RESPONSE.TRANSMOG)
-        end)
+        if myResponse == PP.RESPONSE.TRANSMOG then tmogBtn.GetFontString(tmogBtn):SetTextColor(1, 0.53, 0) end
+        if not showTmog then tmogBtn:Hide() end
 
-        local passBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+        local passBtn = Kit:Button(row, "Pass", function() PP.Loot:SubmitResponse(capturedKey, PP.RESPONSE.PASS) end)
         passBtn:SetSize(btnWidth, btnHeight)
-        if showTmog then
-            passBtn:SetPoint("LEFT", tmogBtn, "RIGHT", 6, 0)
-        else
-            passBtn:SetPoint("LEFT", minorBtn, "RIGHT", 6, 0)
-        end
-        passBtn:SetText("Pass")
-        if myResponse == PP.RESPONSE.PASS then
-            passBtn:GetFontString():SetTextColor(0.5, 0.5, 0.5)
-        end
-        passBtn:SetScript("OnClick", function()
-            PP.Loot:SubmitResponse(capturedKey, PP.RESPONSE.PASS)
-        end)
+        passBtn:SetPoint("LEFT", showTmog and tmogBtn or minorBtn, "RIGHT", 6, 0)
+        if myResponse == PP.RESPONSE.PASS then passBtn.GetFontString(passBtn):SetTextColor(0.5, 0.5, 0.5) end
 
         row:Show()
         yOffset = yOffset + rowHeight + 4
@@ -764,25 +499,18 @@ function PP:RefreshLootResponseFrame()
         return
     end
 
-    -- Resize frame to fit all items
-    local totalHeight = 40 + yOffset + 8
-    f:SetHeight(math.max(80, totalHeight))
+    f:SetHeight(math.max(80, 34 + yOffset + 8))
     container:SetHeight(yOffset)
-    -- Do NOT call f:Show() here — only ShowLootResponseFrame() should open the frame.
-    -- Refreshing should never reopen a frame the player has minimised.
 
-    -- Keep bars in sync when visible but response frame is not
     if self.lootBarsFrame and self.lootBarsFrame:IsShown() then
         self:RefreshLootBars()
     end
 end
 
--- Legacy redirect — still called from Sync.lua HandleLootPost
 function PP:ShowLootPopup(key, itemLink)
     self:ShowLootResponseFrame()
 end
 
--- Close all popups (called during raid end)
 function PP:CloseLootPopups()
     for key, frame in pairs(self.lootPopups) do
         if frame and frame.Hide then frame:Hide() end
@@ -796,28 +524,21 @@ function PP:CloseLootPopups()
     self:HideLootBars()
 end
 
--- =========================================================================
---  LOOT BARS  – per-item floating bars shown when response frame is hidden
---  but items are still pending distribution. All bars share one draggable
---  anchor; position is persisted via LibWindow-1.1.
--- =========================================================================
-
+---------------------------------------------------------------------------
+-- Loot bars
+---------------------------------------------------------------------------
 function PP:CreateLootBarsFrame()
     if self.lootBarsFrame then return end
     local LibWindow = LibStub("LibWindow-1.1")
 
     local f = CreateFrame("Frame", "PPLootBarsFrame", UIParent, "BackdropTemplate")
-    f:SetSize(212, 12)  -- height grows dynamically in RefreshLootBars
+    f:SetSize(212, 12)
     f:SetFrameStrata("DIALOG")
     f:SetClampedToScreen(true)
     f:EnableMouse(true)
-    f:SetBackdrop({
-        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
-        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-        tile = true, tileSize = 32, edgeSize = 14,
-        insets = { left = 3, right = 3, top = 3, bottom = 3 },
-    })
-    f:SetBackdropColor(0.05, 0.05, 0.05, 0.85)
+    Kit:Fill(f, {0.04, 0.04, 0.05, 0.9})
+    f:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+    f:SetBackdropBorderColor(Kit.Palette.border[1], Kit.Palette.border[2], Kit.Palette.border[3], 1)
 
     LibWindow.RegisterConfig(f, PP.db.global.lootBarsAnchor)
     LibWindow.MakeDraggable(f)
@@ -830,25 +551,20 @@ end
 function PP:RefreshLootBars()
     local f = self.lootBarsFrame
     if not f then return end
-
     local LibWindow = LibStub("LibWindow-1.1")
 
-    -- Collect and hide all existing bars without unparenting (preserves the pool)
     local bars = { f:GetChildren() }
     for _, bar in ipairs(bars) do bar:Hide() end
 
     local me = self:GetPlayerFullName()
     local barW, barH = 200, 22
-    local padX, padTop, padBottom = 6, 6, 6
-    local barGap = 2
+    local padX, padTop, padBottom, barGap = 6, 6, 6, 2
     local yOffset = padTop
     local count = 0
 
     local allEntries = {}
     for key, entry in pairs(PP.Repo.Loot:GetAll()) do
-        if not entry.awarded then
-            allEntries[#allEntries + 1] = { key = key, entry = entry }
-        end
+        if not entry.awarded then allEntries[#allEntries + 1] = { key = key, entry = entry } end
     end
     table.sort(allEntries, lootEntrySortLess)
 
@@ -857,82 +573,74 @@ function PP:RefreshLootBars()
         count = count + 1
         local myResponse = entry.responses[me] and entry.responses[me].response or nil
 
-        -- Reuse existing bar or create a new one
         local bar = bars[count]
         if not bar then
             bar = CreateFrame("Button", nil, f)
             bar:SetSize(barW, barH)
-            bar:SetHighlightTexture("Interface\\Buttons\\UI-Listbox-Highlight")
+            local hoverBg = Kit:Fill(bar, {0, 0, 0, 0})
+            local hoverBorder = CreateFrame("Frame", nil, bar, "BackdropTemplate")
+            hoverBorder:SetAllPoints(bar)
+            hoverBorder:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+            hoverBorder:SetBackdropBorderColor(Kit.Palette.accent[1], Kit.Palette.accent[2], Kit.Palette.accent[3], 0.85)
+            hoverBorder:Hide()
+            bar:SetScript("OnEnter", function() Kit.Tint(hoverBg, Kit.Palette.hover); hoverBorder:Show() end)
+            bar:SetScript("OnLeave", function() Kit.Tint(hoverBg, {0, 0, 0, 0}); hoverBorder:Hide() end)
             bar:RegisterForDrag("LeftButton")
             bar:SetScript("OnDragStart", function() f:StartMoving() end)
-            bar:SetScript("OnDragStop", function()
-                f:StopMovingOrSizing()
-                LibWindow.SavePosition(f)
-            end)
-            bar:SetScript("OnClick", function()
-                f:Hide()
-                PP:ShowLootResponseFrame()
-            end)
+            bar:SetScript("OnDragStop", function() f:StopMovingOrSizing(); LibWindow.SavePosition(f) end)
+            bar:SetScript("OnClick", function() f:Hide(); PP:ShowLootResponseFrame() end)
             local icon = bar:CreateTexture(nil, "OVERLAY")
             icon:SetSize(16, 16)
             icon:SetPoint("LEFT", bar, "LEFT", 2, 0)
             icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
             bar._icon = icon
-            local nameStr = bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            local nameStr = bar:CreateFontString(nil, "OVERLAY", "PPFontSmall")
             nameStr:SetPoint("LEFT", bar, "LEFT", 22, 0)
             nameStr:SetPoint("RIGHT", bar, "RIGHT", -42, 0)
             nameStr:SetJustifyH("LEFT")
-            nameStr:SetJustifyV("MIDDLE")
+            nameStr:SetWordWrap(false)
+            nameStr:SetTextColor(Kit.Palette.text[1], Kit.Palette.text[2], Kit.Palette.text[3])
             bar._nameStr = nameStr
-            local respStr = bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            local respStr = bar:CreateFontString(nil, "OVERLAY", "PPFontSmall")
             respStr:SetPoint("RIGHT", bar, "RIGHT", -2, 0)
             respStr:SetJustifyH("RIGHT")
-            respStr:SetJustifyV("MIDDLE")
             bar._respStr = respStr
             bars[count] = bar
         end
 
-        -- Update position
         bar:ClearAllPoints()
         bar:SetPoint("TOPLEFT", f, "TOPLEFT", padX, -yOffset)
 
-        -- Update icon
         local iconTex = (entry.itemID and C_Item.GetItemIconByID(entry.itemID))
         if not iconTex and entry.itemLink then
             local _, _, _, _, tex = GetItemInfoInstant(entry.itemLink)
             iconTex = tex
         end
-        if iconTex then
-            bar._icon:SetTexture(iconTex)
-            bar._icon:Show()
-        else
-            bar._icon:Hide()
-        end
+        if iconTex then bar._icon:SetTexture(iconTex); bar._icon:Show() else bar._icon:Hide() end
 
-        -- Update name and response label
-        bar._nameStr:SetText(entry.itemLink or "Unknown")
-
-        if myResponse == PP.RESPONSE.NEED then
-            bar._respStr:SetText("|cFF00FF00Need|r")
-        elseif myResponse == PP.RESPONSE.MINOR then
-            bar._respStr:SetText("|cFF00CCFFMinor|r")
-        elseif myResponse == PP.RESPONSE.TRANSMOG then
-            bar._respStr:SetText("|cFFFF8800Tmog|r")
-        elseif myResponse == PP.RESPONSE.PASS then
-            bar._respStr:SetText("|cFF888888Pass|r")
-        else
-            bar._respStr:SetText("|cFFFFFF00?|r")
+        truncateToWidth(bar._nameStr, shortItemName(entry.itemLink), barW - 22 - 42)
+        local quality
+        if entry.itemLink then
+            local _, _, q = C_Item.GetItemInfo(entry.itemLink)
+            quality = q
         end
+        if quality then
+            local r, g, b = C_Item.GetItemQualityColor(quality)
+            bar._nameStr:SetTextColor(r, g, b)
+        else
+            bar._nameStr:SetTextColor(Kit.Palette.text[1], Kit.Palette.text[2], Kit.Palette.text[3])
+        end
+        if myResponse == PP.RESPONSE.NEED then bar._respStr:SetText("|cFF00FF00Need|r")
+        elseif myResponse == PP.RESPONSE.MINOR then bar._respStr:SetText("|cFF00CCFFMinor|r")
+        elseif myResponse == PP.RESPONSE.TRANSMOG then bar._respStr:SetText("|cFFFF8800Tmog|r")
+        elseif myResponse == PP.RESPONSE.PASS then bar._respStr:SetText("|cFF888888Pass|r")
+        else bar._respStr:SetText("|cFFFFFF00?|r") end
 
         bar:Show()
         yOffset = yOffset + barH + barGap
     end
 
-    if count == 0 then
-        f:Hide()
-        return
-    end
-
+    if count == 0 then f:Hide(); return end
     f:SetSize(212, yOffset - barGap + padBottom)
 end
 
@@ -948,7 +656,5 @@ function PP:ShowLootBars()
 end
 
 function PP:HideLootBars()
-    if self.lootBarsFrame then
-        self.lootBarsFrame:Hide()
-    end
+    if self.lootBarsFrame then self.lootBarsFrame:Hide() end
 end

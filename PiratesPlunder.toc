@@ -1,10 +1,10 @@
-## Interface: 120001, 120005, 120000
+## Interface: 120100, 120001, 120005, 120000
 ## Title: Pirates Plunder
 ## Author: Lucidify
 ## Version: 0.6.0
 ## X-Curse-Project-ID: 1483035
 ## X-Wago-ID: L6J90xNv
-## IconTexture: Interface/AddOns/PiratesPlunder/media/icon.tga
+## IconTexture: Interface/AddOns/PiratesPlunder/Media/icon.tga
 ## Category-enUS: Loot
 ## Category-deDE: Beute
 ## Category-esES: Botín
@@ -33,6 +33,7 @@ Modules\AwardedLoot.lua
 Modules\Sync.lua
 Modules\Trade.lua
 Commands\Commands.lua
+UI\Kit.lua
 UI\MainWindow.lua
 UI\MinimapIcon.lua
 UI\VersionCheckWindow.lua

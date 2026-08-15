@@ -1,7 +1,3 @@
----------------------------------------------------------------------------
--- Pirates Plunder – Minimap Icon
----------------------------------------------------------------------------
----@type PPAddon
 local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 
 local ICON_CUSTOM = "Interface\\AddOns\\PiratesPlunder\\Media\\icon"
