@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0] - 2026-08-15
+
+### Changed
+- Entire UI layer rebuilt on the new Kit widget system: main window (Roster / Sessions / Settings tabs), Loot Master window, Awarded Loot window, Version Check window, minimap icon.
+- ChatThrottleLib bumped 29 → 31.
+- `CanViewLootMaster()` no longer falls back to a blanket `IsOfficerOrHigher()` check — visibility now strictly follows `CanPostLoot()` (previously could leak loot-master visibility to officers of a different guild during someone else's active session).
+- `PP.Session:Delete` permission check switched from a raw `IsOfficerOrHigher()` to `CanModify()`, matching every other guarded action (also fixes sandbox-mode session delete, which the raw check never special-cased).
+- Interface version list gains `120100` (client patch 12.1.0).
+
+### Removed
+- Custom (non-guild) roster support entirely: `IsCustomRoster`, `CreateCustomRoster`, `RenameCustomRoster`, `DeleteCustomRoster`, `FindCustomRosterWithActiveRaid`, the "New Roster" / "Manage Custom Rosters" UI, and their `StaticPopupDialogs`. `CanModify` / `CanPostLoot` simplified back to guild-only logic.
+- AceGUI-3.0 (+ SharedMediaWidgets), AceConfig-3.0 (+ Cmd/Dialog/Registry), AceDBOptions-3.0, AceLocale-3.0, AceTab-3.0, AceBucket-3.0, lib-st, LibDialog-1.0, LibSharedMedia-3.0, MSA-DropDownMenu-1.0 — unused by the new UI.
+
+
 ## [0.6.0] - 2026-04-30
 ### Added
 - `SESSION_SYNC_REQUEST` / `SESSION_SYNC_REPLY` (`PP:RequestSessionSync`, `PP:HandleSessionSyncRequest`, `PP:HandleSessionSyncReply`): leader-only, narrow alternative to `SYNC_REQUEST` / `SYNC_FULL`. Reply carries the active guild's roster, the active session record, in-flight `pendingLoot`, and `_completedLootKeys`. Broadcast-only with a 5 s cooldown so concurrent requesters from the same burst are coalesced into a single broadcast. `SESSION_SYNC_REPLY` ships at `BULK` priority.
