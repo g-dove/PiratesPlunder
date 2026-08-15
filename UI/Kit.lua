@@ -567,6 +567,7 @@ function Kit:Window(title, w, h)
 
     f.SetOnClose = function(_, fn)
         closeBtn:SetScript("OnClick", fn)
+        f:HookScript("OnHide", fn)
     end
 
     f:Raise()

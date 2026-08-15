@@ -31,6 +31,9 @@ function PP:CreateMainWindow()
         PP.mainWindow = nil
     end)
     self.mainWindow = f
+    self._rosterList = nil
+    self._sessionsList = nil
+    self._settingsList = nil
     PP:RegisterEscFrame(f, "PPMainWindowFrame")
 
     local tabArea = CreateFrame("Frame", nil, f.body)
