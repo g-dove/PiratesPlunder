@@ -7,3 +7,4 @@ manual-changelog:
 ignore:
   - .vscode
   - CLAUDE.md
+  - .idea
