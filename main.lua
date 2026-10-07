@@ -436,8 +436,14 @@ function PiratesPlunder:CanPostLoot()
 end
 
 function PiratesPlunder:CheckActiveRaid()
-    if PP.Repo.Roster:HasActiveSession() and not IsInGroup() then
-        PP.Session:End(PP.SESSION_END.STARTUP_CHECK)
+    if not IsInGroup() then
+        for _, gk in ipairs(PP.Repo.Roster:GetAllGuildKeys()) do
+            local gd = PP.Repo.Roster:GetData(gk)
+            local activeID = gd and gd.activeSessionID
+            if activeID and gd.sessions[activeID] and gd.sessions[activeID].active then
+                PP.Session:End(PP.SESSION_END.STARTUP_CHECK, activeID, gk)
+            end
+        end
     end
     if not PP.Repo.Roster:HasActiveSession() and next(PP.Repo.Loot:GetAll()) ~= nil then
         PP.Repo.Loot:WipeAll()
