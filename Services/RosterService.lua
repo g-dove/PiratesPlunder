@@ -136,10 +136,8 @@ function PP.Roster:AutoPopulate()
     local added = false
 
     for i = 1, count do
-        local unit = "raid" .. i
-        local name, realm = UnitName(unit)
-        if name and name ~= UNKNOWNOBJECT and name ~= "" then
-            local fullName = PP:GetFullName(name .. (realm and realm ~= "" and ("-" .. realm) or ""))
+        local fullName = PP:GetUnitFullName("raid" .. i)
+        if fullName then
             local roster = PP.Repo.Roster:GetRoster()
             if not roster[fullName] then
                 roster[fullName] = NewEntry(fullName)

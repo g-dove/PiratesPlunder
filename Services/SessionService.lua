@@ -19,7 +19,22 @@ PP.SESSION_END = {
     SYNC_FULL      = "sync_full",
     STARTUP_CHECK  = "startup_check",
     RESET          = "reset",
+    ORPHAN_CLEANUP = "orphan_cleanup",
 }
+
+-- Ends this client inferred on its own, without word from the leader. A
+-- record ended this way may be re-adopted at an equal activeSessionVersion
+-- (see _isLocallyDropped in Sync.lua); every other reason is authoritative.
+PP.SESSION_END_SOFT = {
+    [PP.SESSION_END.LEFT_GROUP]     = true,
+    [PP.SESSION_END.LEADER_LEFT]    = true,
+    [PP.SESSION_END.STARTUP_CHECK]  = true,
+    [PP.SESSION_END.ORPHAN_CLEANUP] = true,
+}
+
+-- No raid night runs this long; an older active session found at login is
+-- leftover state, not a live raid.
+PP.SESSION_MAX_AGE = 16 * 60 * 60
 
 ---------------------------------------------------------------------------
 -- End(reason, sessionID, guildKey)
@@ -31,9 +46,16 @@ function PP.Session:End(reason, sessionID, guildKey)
     sessionID = sessionID or (gd and gd.activeSessionID)
     if not sessionID then return end
 
+    -- Only an end the raid will hear about advances activeSessionVersion.
+    -- Local-only ends (left group, sync teardown, non-leader close) used to
+    -- bump it too, so receivers' counters drifted ahead of the leader's and
+    -- the leader's later broadcasts were rejected as stale.
+    local announce = (reason == PP.SESSION_END.OFFICER_ACTION)
+                     and IsInGroup() and PP:IsRaidLeader()
+
     PP:WipeRetryQueue()
     PP.Repo.Roster:MarkSessionEnded(guildKey, sessionID, time(), reason)
-    PP.Repo.Roster:ClearActiveSessionID(guildKey)
+    PP.Repo.Roster:ClearActiveSessionID(guildKey, not announce)
     PP.Repo.Loot:WipeAll()
     PP:CloseLootPopups()
 
@@ -104,6 +126,12 @@ function PP.Session:Create(raidName)
     end
     if not IsInRaid() then
         PP:Print("You must be in a raid group to create a session.")
+        return
+    end
+    -- BroadcastSessionCreate is leader-gated; a non-leader officer would end up
+    -- with a session (and a bumped activeSessionVersion) that no one else sees.
+    if not PP:IsRaidLeader() then
+        PP:Print("Only the raid leader can create a session.")
         return
     end
 
@@ -199,6 +227,134 @@ function PP.Session:Delete(raidID)
 end
 
 ---------------------------------------------------------------------------
+-- CloseOrphans(guildKey)
+-- A record can carry active = true without being gd.activeSessionID (e.g.
+-- installed from a peer while our pointer was elsewhere). Every teardown path
+-- follows the pointer, so such a record would show [ACTIVE] forever. Marks
+-- them ended at their last recorded activity. Returns the number closed.
+---------------------------------------------------------------------------
+function PP.Session:CloseOrphans(guildKey)
+    local gd = PP.Repo.Roster:GetData(guildKey)
+    if not gd or not gd.sessions then return 0 end
+    local closed = 0
+    for id, s in pairs(gd.sessions) do
+        if s.active and id ~= gd.activeSessionID then
+            local last = s.startTime or time()
+            for _, b in ipairs(s.bosses or {}) do
+                if b.time and b.time > last then last = b.time end
+            end
+            for _, it in ipairs(s.items or {}) do
+                if it.time and it.time > last then last = it.time end
+            end
+            PP.Repo.Roster:MarkSessionEnded(guildKey, id, last, PP.SESSION_END.ORPHAN_CLEANUP)
+            closed = closed + 1
+        end
+    end
+    return closed
+end
+
+---------------------------------------------------------------------------
+-- IsLeaderInGroup(guildKey, sessionID)
+-- true if the session's leader is in our current group, false if not, nil
+-- when it can't be told yet (no leader recorded, or a member's name hasn't
+-- loaded). Callers only act on an explicit false.
+---------------------------------------------------------------------------
+function PP.Session:IsLeaderInGroup(guildKey, sessionID)
+    local gd = PP.Repo.Roster:GetData(guildKey)
+    local s  = gd and sessionID and gd.sessions and gd.sessions[sessionID]
+    if not s or not s.leader then return nil end
+    if not IsInGroup() then return false end
+
+    local units = {}
+    local n = GetNumGroupMembers()
+    if IsInRaid() then
+        for i = 1, n do units[#units + 1] = "raid" .. i end
+    else
+        units[1] = "player"
+        for i = 1, n - 1 do units[#units + 1] = "party" .. i end
+    end
+
+    local unresolved = false
+    for _, unit in ipairs(units) do
+        local name = PP:GetUnitFullName(unit)
+        if name == s.leader then return true end
+        if not name then unresolved = true end
+    end
+    if unresolved then return nil end
+    return false
+end
+
+---------------------------------------------------------------------------
+-- EndStale(guildKey, reason)
+-- Ends the active session under any roster, not just the selected one.
+-- The selected roster goes through End(); another roster only has its own
+-- records torn down, since live loot state belongs to the selected roster.
+-- Returns true if a session was ended.
+---------------------------------------------------------------------------
+function PP.Session:EndStale(guildKey, reason)
+    local gd = PP.Repo.Roster:GetData(guildKey)
+    local id = gd and gd.activeSessionID
+    if not id then return false end
+    if guildKey == PP:GetActiveGuildKey() then
+        self:End(reason, id, guildKey)
+        return true
+    end
+    local snap = PP.Repo.Roster:BuildRosterSnapshot(guildKey)
+    if snap then PP.Repo.Roster:SetSessionSnapshot(guildKey, id, snap) end
+    PP.Repo.Roster:MarkSessionEnded(guildKey, id, time(), reason)
+    PP.Repo.Roster:ClearActiveSessionID(guildKey, true)
+    return true
+end
+
+---------------------------------------------------------------------------
+-- SweepStale(atLogin)
+-- Ends active sessions, under every roster, that can't still be running:
+--   * not in a group (login only; leaving a group goes through the 30 s
+--     pendingSessionEnd grace in OnGroupLeft)
+--   * older than SESSION_MAX_AGE (login only)
+--   * the session leader isn't in our group. The selected roster in a raid
+--     is left to CheckLeaderPresent, which handles leader hand-offs.
+-- The session awaiting its pendingSessionEnd timer is skipped. Returns the
+-- number of sessions ended.
+---------------------------------------------------------------------------
+function PP.Session:SweepStale(atLogin)
+    local activeKey = PP:GetActiveGuildKey()
+    local pending   = PP.db.global.pendingSessionEnd
+    local now       = time()
+    local ended     = 0
+    for _, gk in ipairs(PP.Repo.Roster:GetAllGuildKeys()) do
+        local gd = PP.Repo.Roster:GetData(gk)
+        local id = gd and gd.activeSessionID
+        local s  = id and gd.sessions and gd.sessions[id]
+        local isPending = pending and pending.guildKey == gk and pending.sessionID == id
+        if s and s.active and not isPending then
+            local reason
+            if not IsInGroup() then
+                if atLogin then reason = PP.SESSION_END.STARTUP_CHECK end
+            elseif atLogin and s.startTime and now - s.startTime > PP.SESSION_MAX_AGE then
+                reason = PP.SESSION_END.STARTUP_CHECK
+            elseif (gk ~= activeKey or not IsInRaid())
+                   and self:IsLeaderInGroup(gk, id) == false then
+                reason = atLogin and PP.SESSION_END.STARTUP_CHECK or PP.SESSION_END.LEADER_LEFT
+            end
+            if reason and self:EndStale(gk, reason) then
+                ended = ended + 1
+            end
+        end
+    end
+    return ended
+end
+
+-- A new raid leader may only take over a session if they belong to it: on the
+-- session's roster or in its guild. Otherwise we've ended up in someone else's
+-- raid (LFR, a pug) with a session still open.
+local function _belongsToSession(guildKey, fullName, unit)
+    local roster = PP.Repo.Roster:GetRoster(guildKey)
+    if roster[fullName] then return true end
+    return unit ~= nil and GetGuildInfo(unit) == guildKey
+end
+
+---------------------------------------------------------------------------
 -- CheckLeaderPresent()
 -- Moved from PP:CheckSessionLeaderPresent() in Raid.lua.
 ---------------------------------------------------------------------------
@@ -228,13 +384,23 @@ function PP.Session:CheckLeaderPresent()
     end
 
     -- Original leader is gone. Find the new raid leader (rank == 2).
-    local newLeader = nil
+    local newLeader, newLeaderUnit = nil, nil
     for i = 1, GetNumGroupMembers() do
         local name, rank = GetRaidRosterInfo(i)
         if rank == 2 then
-            newLeader = PP:GetFullName(name)
+            newLeader     = PP:GetFullName(name)
+            newLeaderUnit = "raid" .. i
             break
         end
+    end
+
+    if newLeader and not _belongsToSession(PP:GetActiveGuildKey(), newLeader, newLeaderUnit) then
+        if PP._pendingLeaderLeftTimer then
+            PP:CancelTimer(PP._pendingLeaderLeftTimer)
+            PP._pendingLeaderLeftTimer = nil
+        end
+        PP.Session:End(PP.SESSION_END.LEADER_LEFT)
+        return
     end
 
     local me = PP:GetPlayerFullName()
