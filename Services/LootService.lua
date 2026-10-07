@@ -240,8 +240,8 @@ function PP.Loot:Award(key, fullName, free)
             pointsSpent = currentScore
             newScore    = 0
         end
-        roster[fullName].score = newScore
-        PP.Repo.Roster:BumpRosterVersion()
+        PP.Roster:SetScores({ [fullName] = newScore })
+        PP.Roster:Commit()
     end
 
     -- Record in session history with cost info (key stored for LOOT_STATE_QUERY matching)
@@ -283,6 +283,8 @@ function PP.Loot:Award(key, fullName, free)
             newScore             = newScore,
             guildKey             = gk,
             rosterVersion        = rosterVer,
+            -- Officers with a ledger get this change from ours, not from here.
+            ledger               = PP.Repo.Ledger:GetActive(gk) and true or nil,
             activeSessionID      = gd and gd.activeSessionID or nil,
             activeSessionVersion = gd and gd.activeSessionVersion or nil,
             session              = active and {

@@ -23,6 +23,7 @@ embeds.xml
 main.lua
 Repository\RosterRepository.lua
 Repository\LootRepository.lua
+Repository\LedgerRepository.lua
 Services\SessionService.lua
 Services\RosterService.lua
 Services\LootService.lua
@@ -31,6 +32,7 @@ Modules\Raid.lua
 Modules\Loot.lua
 Modules\AwardedLoot.lua
 Modules\Sync.lua
+Modules\OfficerSync.lua
 Modules\Trade.lua
 Commands\Commands.lua
 UI\Kit.lua

@@ -11,12 +11,6 @@ PP.Roster = PP.Roster or {}
 -- Private helpers
 ---------------------------------------------------------------------------
 
-local function CommitRosterChange()
-    PP.Repo.Roster:BumpRosterVersion()
-    PP:BroadcastRoster()
-    PP:RefreshMainWindow()
-end
-
 -- Build a new roster entry table from a normalised fullName.
 local function NewEntry(fullName)
     return {
@@ -24,6 +18,95 @@ local function NewEntry(fullName)
         realm = fullName:match("-(.+)$") or "",
         score = 0,
     }
+end
+
+---------------------------------------------------------------------------
+-- Score writes
+-- Officers on their own guild's roster write to the ledger
+-- (Repository/LedgerRepository.lua) and gd.roster is rebuilt from it; every
+-- other client edits gd.roster directly. Each call is one change; follow it
+-- with Commit.
+---------------------------------------------------------------------------
+
+-- Players changed in the ledger since the last Commit, per guild key; Commit
+-- sends them to the other officers as LEDGER_OPS.
+local touched = {}
+
+local function Touched(gk, names)
+    touched[gk] = touched[gk] or {}
+    for fullName in pairs(names) do touched[gk][fullName] = true end
+end
+
+-- targets: { [fullName] = newScore } for players already on the roster.
+function PP.Roster:SetScores(targets, gk)
+    gk = gk or PP:GetActiveGuildKey()
+    local ledger = PP.Repo.Ledger:GetActive(gk)
+    if ledger then
+        PP.Repo.Ledger:SetTo(ledger, targets)
+        Touched(gk, targets)
+        return
+    end
+    local roster = PP.Repo.Roster:GetRoster(gk)
+    for fullName, score in pairs(targets) do
+        if roster[fullName] then roster[fullName].score = score end
+    end
+end
+
+-- deltas: { [fullName] = n } for players already on the roster.
+function PP.Roster:AddScores(deltas, gk)
+    gk = gk or PP:GetActiveGuildKey()
+    local ledger = PP.Repo.Ledger:GetActive(gk)
+    if ledger then
+        PP.Repo.Ledger:Adjust(ledger, deltas)
+        Touched(gk, deltas)
+        return
+    end
+    local roster = PP.Repo.Roster:GetRoster(gk)
+    for fullName, d in pairs(deltas) do
+        if roster[fullName] then roster[fullName].score = roster[fullName].score + d end
+    end
+end
+
+-- resets: { [fullName] = { base = n } | { rm = true } }. Adds missing
+-- players, overwrites scores, or removes players.
+function PP.Roster:ResetEntries(resets, gk)
+    gk = gk or PP:GetActiveGuildKey()
+    local ledger = PP.Repo.Ledger:GetActive(gk)
+    if ledger then
+        PP.Repo.Ledger:Reset(ledger, resets)
+        Touched(gk, resets)
+        return
+    end
+    local roster = PP.Repo.Roster:GetRoster(gk)
+    for fullName, r in pairs(resets) do
+        if r.rm then
+            roster[fullName] = nil
+        else
+            roster[fullName] = roster[fullName] or NewEntry(fullName)
+            roster[fullName].score = r.base or 0
+        end
+    end
+end
+
+-- Advances rosterVersion (derived on a ledger client), then optionally
+-- broadcasts the roster and refreshes the UI.
+function PP.Roster:Commit(gk, broadcast)
+    gk = gk or PP:GetActiveGuildKey()
+    if PP.Repo.Ledger:GetActive(gk) then
+        PP.Repo.Ledger:Rebuild(gk)
+        if touched[gk] then
+            PP:SendLedgerOps(gk, touched[gk])
+            touched[gk] = nil
+        end
+    else
+        PP.Repo.Roster:BumpRosterVersion(gk)
+    end
+    if broadcast then PP:BroadcastRoster() end
+    PP:RefreshMainWindow()
+end
+
+local function CommitRosterChange()
+    PP.Roster:Commit(nil, true)
 end
 
 ---------------------------------------------------------------------------
@@ -41,7 +124,7 @@ function PP.Roster:Add(fullName)
         PP:Print(PP:GetShortName(fullName) .. " is already in the roster.")
         return
     end
-    roster[fullName] = NewEntry(fullName)
+    self:ResetEntries({ [fullName] = { base = 0 } })
     CommitRosterChange()
 end
 
@@ -55,7 +138,7 @@ function PP.Roster:Remove(fullName)
         return
     end
     fullName = PP:GetFullName(fullName)
-    PP.Repo.Roster:GetRoster()[fullName] = nil
+    self:ResetEntries({ [fullName] = { rm = true } })
     CommitRosterChange()
 end
 
@@ -75,7 +158,7 @@ function PP.Roster:SetScore(fullName, newScore)
         return
     end
     newScore = tonumber(newScore) or 0
-    roster[fullName].score = newScore
+    self:SetScores({ [fullName] = newScore })
     CommitRosterChange()
     PP:Print(PP:GetShortName(fullName) .. " score set to " .. newScore)
 end
@@ -103,9 +186,11 @@ function PP.Roster:Randomize()
     end
 
     -- Top of list = highest score = #names, bottom = 1
+    local resets = {}
     for idx, fullName in ipairs(names) do
-        roster[fullName].score = #names - idx + 1
+        resets[fullName] = { base = #names - idx + 1 }
     end
+    self:ResetEntries(resets)
 
     PP:Print("Roster order randomized!")
     CommitRosterChange()
@@ -120,7 +205,11 @@ function PP.Roster:Clear()
         PP:Print("Only officers can clear the roster.")
         return
     end
-    wipe(PP.Repo.Roster:GetRoster())
+    local resets = {}
+    for fullName in pairs(PP.Repo.Roster:GetRoster()) do
+        resets[fullName] = { rm = true }
+    end
+    self:ResetEntries(resets)
     PP:Print("Roster cleared.")
     CommitRosterChange()
 end
@@ -133,20 +222,18 @@ function PP.Roster:AutoPopulate()
     if not IsInRaid() then return end
     if not PP:IsRaidLeader() then return end
     local count = GetNumGroupMembers()
-    local added = false
+    local roster = PP.Repo.Roster:GetRoster()
+    local resets = {}
 
     for i = 1, count do
         local fullName = PP:GetUnitFullName("raid" .. i)
-        if fullName then
-            local roster = PP.Repo.Roster:GetRoster()
-            if not roster[fullName] then
-                roster[fullName] = NewEntry(fullName)
-                added = true
-            end
+        if fullName and not roster[fullName] then
+            resets[fullName] = { base = 0 }
         end
     end
 
-    if added then
+    if next(resets) then
+        self:ResetEntries(resets)
         CommitRosterChange()
     end
 end
@@ -161,21 +248,20 @@ function PP.Roster:AddScoreToRaidMembers(amount)
     if not IsInRaid() then return end
     local roster = PP.Repo.Roster:GetRoster()
     local count = GetNumGroupMembers()
-    local anyUpdated = false
+    local deltas = {}
     for i = 1, count do
         local name = GetRaidRosterInfo(i)
         if name then
             local fullName = PP:GetFullName(name)
             if roster[fullName] then
-                roster[fullName].score = roster[fullName].score + amount
-                anyUpdated = true
+                deltas[fullName] = amount
             end
         end
     end
-    if not anyUpdated then return end
-    PP.Repo.Roster:BumpRosterVersion()
+    if not next(deltas) then return end
+    self:AddScores(deltas)
+    self:Commit()
     PP:BroadcastGroupScore(amount)
-    PP:RefreshMainWindow()
 end
 
 ---------------------------------------------------------------------------

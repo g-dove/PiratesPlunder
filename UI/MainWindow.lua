@@ -517,14 +517,29 @@ function PP:DrawSettingsTab()
     end
 
     list:Add(Kit:Heading(content, "Synchronisation"), 20)
-    local syncDesc = Kit:Label(content, "Request a full roster and session sync from any online officer in your current group.", "small")
+    -- Officers keeping a ledger also sync with each other over officer chat,
+    -- no group needed.
+    local myGuild   = PP:GetPlayerGuild()
+    local hasLedger = PP.Repo.Ledger:GetActive(myGuild) ~= nil
+    local syncText  = hasLedger
+        and "Sync the roster with other online officers. In a group, also request the session from your group leader."
+        or  "Request a full roster and session sync from your group leader."
+    local syncDesc = Kit:Label(content, syncText, "small")
     syncDesc:SetWordWrap(true)
     list:Add(syncDesc, 28)
 
     local syncRow = Kit:Row(content, 24)
     local syncBtn = Kit:Button(syncRow, "Request Sync", function()
-        if not IsInGroup() then PP:Print("You must be in a group to request a sync.")
-        else PP:RequestSync(); PP:Print("Sync requested.") end
+        local officerSync = PP.Repo.Ledger:GetActive(myGuild) ~= nil
+        if officerSync then PP:SendLedgerHello(myGuild) end
+        if IsInGroup() then
+            PP:RequestSync()
+            PP:Print("Sync requested.")
+        elseif officerSync then
+            PP:Print("Sync requested from officers.")
+        else
+            PP:Print("You must be in a group to request a sync.")
+        end
     end)
     syncBtn:SetSize(140, 22)
     syncBtn:SetPoint("LEFT", syncRow, "LEFT", 0, 0)
@@ -532,8 +547,16 @@ function PP:DrawSettingsTab()
     local lastAnchor = syncBtn
     if PP:CanModify() then
         local bcBtn = Kit:Button(syncRow, "Broadcast Roster", function()
-            if not IsInGroup() then PP:Print("You must be in a group to broadcast.")
-            else PP:BroadcastRoster(); PP:Print("Roster broadcast to group.") end
+            local officerSync = PP.Repo.Ledger:GetActive(myGuild) ~= nil
+            if officerSync then PP:SendLedgerState(myGuild) end
+            if IsInGroup() then
+                PP:BroadcastRoster()
+                PP:Print("Roster broadcast to group" .. (officerSync and " and officers." or "."))
+            elseif officerSync then
+                PP:Print("Roster sent to officers.")
+            else
+                PP:Print("You must be in a group to broadcast.")
+            end
         end)
         bcBtn:SetSize(150, 22)
         bcBtn:SetPoint("LEFT", lastAnchor, "RIGHT", 8, 0)

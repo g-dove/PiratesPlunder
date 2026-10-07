@@ -39,6 +39,10 @@ local MSG_PRIORITY = {
     [PP.MSG.SNAPSHOT_REPLY]       = "BULK",
     -- Carries roster + active session + live loot state.
     [PP.MSG.SESSION_SYNC_REPLY]   = "BULK",
+    -- Officer ledger sync
+    [PP.MSG.LEDGER_HELLO]         = "NORMAL",
+    [PP.MSG.LEDGER_OPS]           = "NORMAL",
+    [PP.MSG.LEDGER_STATE]         = "BULK",
 }
 
 ---------------------------------------------------------------------------
@@ -57,12 +61,15 @@ local function newSalt()
     return string.format("%x:%x:%x", time(), math.floor(GetTime() * 1000) % 0x100000, _saltCounter)
 end
 
-function PP:SendAddonMessage(msgType, data, target)
+-- channel: explicit distribution (e.g. "OFFICER") instead of whisper/group.
+function PP:SendAddonMessage(msgType, data, target, channel)
     if self._sandbox then return end
     local payload  = self:Serialize(newSalt(), msgType, data)
     local encoded  = LibDeflate:EncodeForWoWAddonChannel(LibDeflate:CompressDeflate(payload, { level = 5 }))
     local prio     = MSG_PRIORITY[msgType] or "NORMAL"
-    if target then
+    if channel then
+        self:SendCommMessage(PP.COMM_PREFIX, encoded, channel, nil, prio)
+    elseif target then
         self:SendCommMessage(PP.COMM_PREFIX, encoded, "WHISPER", target, prio)
     elseif IsInRaid() then
         self:SendCommMessage(PP.COMM_PREFIX, encoded, "RAID", nil, prio)
@@ -101,6 +108,15 @@ function PP:OnCommReceived(prefix, message, distribution, sender)
     local me = self:GetPlayerFullName()
     sender = self:GetFullName(sender)
     if sender == me then return end
+
+    -- Officer ledger traffic comes from the whole guild, not the group, so it
+    -- must not land in _ppUsers.
+    if msgType == PP.MSG.LEDGER_HELLO or msgType == PP.MSG.LEDGER_STATE
+       or msgType == PP.MSG.LEDGER_OPS then
+        self:HandleLedgerMessage(msgType, data, sender, distribution)
+        return
+    end
+
     PP._ppUsers = PP._ppUsers or {}
     PP._ppUsers[sender] = true
 
@@ -356,7 +372,7 @@ end
 
 function PP:BroadcastRoster()
     if not IsInGroup() then return end
-    if not self:IsRaidLeader() then return end
+    if not self:IsGroupLeader() then return end
     local gk = self:GetActiveGuildKey()
     local gd = PP.Repo.Roster:GetData(gk)
     if not gd then return end
@@ -367,6 +383,7 @@ function PP:BroadcastRoster()
         roster               = gd.roster,
         version              = gd.rosterVersion,
         guildKey             = gk,
+        ledger               = PP.Repo.Ledger:GetActive(gk) and true or nil,
         activeSessionID      = gd.activeSessionID,
         activeSessionVersion = gd.activeSessionVersion,
     })
@@ -386,6 +403,7 @@ function PP:BroadcastGroupScore(amount)
         amount               = amount or 1,
         version              = ver,
         guildKey             = gk,
+        ledger               = PP.Repo.Ledger:GetActive(gk) and true or nil,
         activeSessionID      = gd.activeSessionID,
         activeSessionVersion = gd.activeSessionVersion,
     })
@@ -466,10 +484,9 @@ local SYNC_REQUEST_TRUST_WINDOW = 15
 
 function PP:_isSenderInGroup(sender)
     if not sender then return false end
-    local count = GetNumGroupMembers() or 0
-    for i = 1, count do
-        local name = GetRaidRosterInfo(i)
-        if name and self:GetFullName(name) == sender then
+    -- Unit-based so it works in a party as well as a raid.
+    for _, unit in ipairs(self:GetGroupUnits()) do
+        if self:GetUnitFullName(unit) == sender then
             return true
         end
     end
@@ -477,9 +494,9 @@ function PP:_isSenderInGroup(sender)
 end
 
 function PP:SendFullSync(guildKey, target)
-    -- Only the raid leader is the source of truth, so only the leader pushes
-    -- a full sync to the raid (whether broadcast or whisper-targeted).
-    if IsInGroup() and not self:IsRaidLeader() then return end
+    -- Only the group leader is the source of truth, so only the leader pushes
+    -- a full sync to the group (whether broadcast or whisper-targeted).
+    if IsInGroup() and not self:IsGroupLeader() then return end
     -- Cooldown only applies to broadcasts; targeted whispers respond to a
     -- specific request and must not be suppressed by an unrelated broadcast.
     if not target then
@@ -521,15 +538,17 @@ end
 -- have a higher version than the requester. A small random jitter prevents
 -- all online officers from whispering back simultaneously.
 function PP:HandleSyncRequest(sender, data)
-    -- Only the raid leader replies. Stops officers and assists from racing
-    -- to whisper back overlapping (and possibly stale) full syncs.
-    if not self:IsRaidLeader() then return end
+    -- Only the group leader (raid or party) replies. Stops officers and
+    -- assists from racing to whisper back overlapping (and possibly stale)
+    -- full syncs.
+    if not self:IsGroupLeader() then return end
     -- Respond using OUR active guild key, not the requester's.  A joiner whose
     -- _activeGuildKey is still stale (own guild instead of the raid leader's)
     -- would otherwise be ignored by every officer in the raid.
+    -- No live session needed: the reply is roster + session history.
     local gk = self:GetActiveGuildKey()
     local gd = PP.Repo.Roster:GetData(gk)
-    if not gd or not gd.activeSessionID then return end
+    if not gd then return end
     local requesterVersion   = data and data.rosterVersion   or -1
     local requesterRaidItems = data and data.raidItemCount   or -1
     -- Count our own awarded items across all sessions
@@ -559,6 +578,9 @@ end
 -- Receive full sync data
 function PP:HandleSyncFull(data, sender, distribution)
     if not data or not data.guilds then return end
+    -- Only the group leader sends SYNC_FULL; without this, anyone could
+    -- whisper a higher-version roster for a guild key we already know.
+    if not self:IsSenderGroupLeader(sender) then return end
     -- Only accept data for guild keys we already know about or that match our
     -- own guild / active key.  This prevents foreign guild records from being
     -- auto-created in our database just because an officer has stale history.
@@ -579,8 +601,11 @@ function PP:HandleSyncFull(data, sender, distribution)
             -- (do nothing – ignore this guild's data entirely)
         else
             local local_gd = PP.Repo.Roster:EnsureData(gk)
+            -- A ledger client's roster only changes through its ledger.
+            local hasLedger = PP.Repo.Ledger:GetActive(gk) ~= nil
             -- Roster: take higher version
-            if incoming.rosterVersion and incoming.rosterVersion > local_gd.rosterVersion then
+            if not hasLedger
+               and incoming.rosterVersion and incoming.rosterVersion > local_gd.rosterVersion then
                 local_gd.roster        = incoming.roster or local_gd.roster
                 local_gd.rosterVersion = incoming.rosterVersion
             end
@@ -617,7 +642,7 @@ function PP:HandleSyncFull(data, sender, distribution)
                         local_gd.sessions[sessionID] = nil
                         local_gd.deletedSessions[sessionID] = tombVer
                         -- Advance our version so future syncs from us carry the tombstone
-                        if tombVer > local_gd.rosterVersion then
+                        if not hasLedger and tombVer > local_gd.rosterVersion then
                             local_gd.rosterVersion = tombVer
                         end
                         if local_gd.activeSessionID == sessionID then
@@ -775,8 +800,10 @@ function PP:HandleSessionSyncReply(data, sender, distribution)
     self:_adoptSessionContext(data.guildKey, data.activeSessionID, data.activeSessionVersion)
 
     local gd = PP.Repo.Roster:EnsureData(data.guildKey)
-    -- Roster merge: higher-version-wins
-    if data.rosterVersion and data.rosterVersion > gd.rosterVersion then
+    -- Roster merge: higher-version-wins (a ledger client's roster only changes
+    -- through its ledger)
+    if not PP.Repo.Ledger:GetActive(data.guildKey)
+       and data.rosterVersion and data.rosterVersion > gd.rosterVersion then
         gd.roster        = data.roster or gd.roster
         gd.rosterVersion = data.rosterVersion
     end
@@ -846,9 +873,27 @@ end
 
 function PP:HandleRosterUpdate(data, sender)
     if not data or not data.guildKey then return end
+    if not self:IsSenderGroupLeader(sender) then return end
     self:_adoptSessionContext(data.guildKey, data.activeSessionID, data.activeSessionVersion)
     local gd = PP.Repo.Roster:GetData(data.guildKey)
     if not gd then return end
+    local ledger = PP.Repo.Ledger:GetActive(data.guildKey)
+    if ledger then
+        -- A ledger leader's changes reach us through its ledger. A leader
+        -- without one can only have added members (AutoPopulate); its scores
+        -- are covered by the award / group-score events.
+        if not data.ledger and data.roster then
+            local added = false
+            for fullName in pairs(data.roster) do
+                if PP.Repo.Ledger:AddJoin(ledger, fullName) then added = true end
+            end
+            if added then
+                PP.Repo.Ledger:Rebuild(data.guildKey)
+                self:RefreshMainWindow()
+            end
+        end
+        return
+    end
     if data.version and data.version > gd.rosterVersion then
         gd.roster        = data.roster or gd.roster
         gd.rosterVersion = data.version
@@ -861,9 +906,29 @@ end
 
 function PP:HandleGroupScore(data, sender)
     if not data or not data.guildKey then return end
+    if not self:IsSenderGroupLeader(sender) then return end
     self:_adoptSessionContext(data.guildKey, data.activeSessionID, data.activeSessionVersion)
     local gd = PP.Repo.Roster:GetData(data.guildKey)
     if not gd then return end
+    local ledger = PP.Repo.Ledger:GetActive(data.guildKey)
+    if ledger then
+        if data.ledger or not IsInRaid() then return end
+        -- Keyed by sender + version so every officer records the same event.
+        local deltas = {}
+        for i = 1, GetNumGroupMembers() do
+            local name = GetRaidRosterInfo(i)
+            local fullName = name and self:GetFullName(name)
+            if fullName and PP.Repo.Ledger:Score(ledger, fullName) then
+                deltas[fullName] = data.amount or 1
+            end
+        end
+        local eventID = "grp:" .. sender .. ":" .. tostring(data.version)
+        if PP.Repo.Ledger:AddEvent(ledger, eventID, deltas) then
+            PP.Repo.Ledger:Rebuild(data.guildKey)
+            self:RefreshMainWindow()
+        end
+        return
+    end
     if not (data.version and data.version > gd.rosterVersion) then return end
     local amount = data.amount or 1
     if IsInRaid() then
@@ -915,12 +980,20 @@ function PP:HandleSessionDelete(data, sender)
     local gd = PP.Repo.Roster:GetData(data.guildKey)
     if not gd then return end
 
-    -- Only apply if the incoming version is newer than ours (same guard as roster updates)
-    if data.version and data.version <= gd.rosterVersion then return end
+    -- Only apply if the incoming version is newer than ours (same guard as roster updates).
+    -- A ledger client's version is derived from scores, so it can't order a
+    -- delete; apply any delete we haven't recorded, from someone in our group.
+    local hasLedger = PP.Repo.Ledger:GetActive(data.guildKey) ~= nil
+    if hasLedger then
+        if gd.deletedSessions and gd.deletedSessions[data.raidID] then return end
+        if not self:_isSenderInGroup(sender) then return end
+    elseif data.version and data.version <= gd.rosterVersion then
+        return
+    end
 
     gd.sessions[data.raidID] = nil
     if gd.sessionSnapshots then gd.sessionSnapshots[data.raidID] = nil end
-    gd.rosterVersion = data.version
+    if not hasLedger then gd.rosterVersion = data.version end
 
     -- Record tombstone so this deletion propagates to offline peers via future syncs
     if not gd.deletedSessions then gd.deletedSessions = {} end
@@ -974,6 +1047,8 @@ end
 -- Score update
 function PP:HandleScoreUpdate(data, sender)
     if not data or not data.guildKey then return end
+    if not self:IsSenderGroupLeader(sender) then return end
+    if PP.Repo.Ledger:GetActive(data.guildKey) then return end
     local gd = PP.Repo.Roster:GetData(data.guildKey)
     if not gd then return end
     if data.version and data.version > gd.rosterVersion then
@@ -1045,8 +1120,20 @@ function PP:HandleLootAward(data, sender)
         end
         self:RequestSessionSync()
     end
+    local ledger = PP.Repo.Ledger:GetActive(data.guildKey)
+    if ledger then
+        -- A ledger leader's deduction reaches us through its ledger. Otherwise
+        -- record it as an event keyed by the loot key, so every officer writes
+        -- the same entry.
+        if not data.ledger and data.awardedTo and (data.pointsSpent or 0) ~= 0
+           and PP.Repo.Ledger:Score(ledger, data.awardedTo) then
+            if PP.Repo.Ledger:AddEvent(ledger, "award:" .. data.key,
+                                       { [data.awardedTo] = -data.pointsSpent }) then
+                PP.Repo.Ledger:Rebuild(data.guildKey)
+            end
+        end
     -- Apply score deduction to the winner
-    if data.awardedTo and data.newScore ~= nil then
+    elseif data.awardedTo and data.newScore ~= nil then
         local roster = PP.Repo.Roster:GetRoster(data.guildKey)
         if roster[data.awardedTo] then
             roster[data.awardedTo].score = data.newScore
@@ -1055,7 +1142,7 @@ function PP:HandleLootAward(data, sender)
     -- Advance local rosterVersion to match the loot master. A version gap
     -- (missed prior broadcast) triggers RequestSessionSync; the leader replies
     -- with the full roster + active session + live loot state.
-    if data.rosterVersion and data.guildKey then
+    if not ledger and data.rosterVersion and data.guildKey then
         local gd = PP.Repo.Roster:GetData(data.guildKey)
         if gd then
             if data.rosterVersion > gd.rosterVersion + 1 then

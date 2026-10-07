@@ -36,6 +36,9 @@
 ---@field SNAPSHOT_REPLY   string
 ---@field SESSION_SYNC_REQUEST string
 ---@field SESSION_SYNC_REPLY   string
+---@field LEDGER_HELLO     string
+---@field LEDGER_STATE     string
+---@field LEDGER_OPS       string
 
 ---@class PPResponseConstants
 ---@field NEED     string
@@ -182,6 +185,78 @@ function PPLootRepo:Restore() end
 ---@class PPRepo
 ---@field Roster PPRosterRepo
 ---@field Loot   PPLootRepo
+---@field Ledger PPLedgerRepo
+
+---------------------------------------------------------------------------
+-- Repository layer – Repository/LedgerRepository.lua
+---------------------------------------------------------------------------
+
+---@class PPLedgerReset
+---@field e    integer               epoch (Lamport)
+---@field a    string                author / event ID (tie-break)
+---@field s    integer               author's seq when written
+---@field base integer
+---@field bl   table<string, integer> each author's total at reset time
+---@field rm   boolean|nil           player removed
+
+---@class PPLedgerPlayer
+---@field reset PPLedgerReset|nil
+---@field c     table<string, {d: integer, s: integer}>  running total per author
+
+---@class PPLedger
+---@field schema  integer
+---@field self    string                     "<Name-Realm>#<incarnation>"
+---@field seq     table<string, integer>     version vector (authors and event IDs)
+---@field epoch   integer
+---@field seed    {v: integer, a: string, scores: table<string, integer>}
+---@field players table<string, PPLedgerPlayer>
+
+---@class PPLedgerRepo
+---@field SCHEMA         integer
+---@field VERSION_OFFSET integer
+local PPLedgerRepo = {}
+
+---@return PPLedger
+function PPLedgerRepo:New(author, seedVersion, scores) end
+---@return integer|nil
+function PPLedgerRepo:Score(ledger, name) end
+---@return integer
+function PPLedgerRepo:RawScore(ledger, name) end
+---@return table<string, integer> scores, integer version
+function PPLedgerRepo:Derive(ledger) end
+function PPLedgerRepo:Adjust(ledger, deltas) end
+function PPLedgerRepo:SetTo(ledger, targets) end
+function PPLedgerRepo:Reset(ledger, resets) end
+function PPLedgerRepo:Touch(ledger) end
+---@return boolean
+function PPLedgerRepo:AddEvent(ledger, eventID, deltas) end
+---@return boolean
+function PPLedgerRepo:AddJoin(ledger, name) end
+---@return boolean changed
+function PPLedgerRepo:Merge(dst, src) end
+---@return {seed: string, seq: table<string, integer>, sum: table<string, integer>}
+function PPLedgerRepo:Summary(ledger) end
+---@return boolean
+function PPLedgerRepo:SummariesEqual(x, y) end
+--- Partial ledger with this author's entries for `names`, for LEDGER_OPS.
+---@param names table<string, boolean>
+function PPLedgerRepo:ExtractOps(ledger, names) end
+---@param partial? boolean  OPS / delta STATE payload (no schema; seed optional)
+---@return boolean
+function PPLedgerRepo:IsWellFormed(src, partial) end
+---@return table<string, boolean> authors, boolean seedDiffers
+function PPLedgerRepo:DiffAuthors(x, y) end
+--- Partial ledger with only `authors`' entries (plus the seed if asked).
+---@param authors table<string, boolean>
+---@param includeSeed? boolean
+function PPLedgerRepo:ExtractAuthors(ledger, authors, includeSeed) end
+---@return boolean
+function PPLedgerRepo:IsSummary(s) end
+---@return PPLedger|nil
+function PPLedgerRepo:GetActive(gk) end
+function PPLedgerRepo:Rebuild(gk) end
+---@return PPLedger|nil
+function PPLedgerRepo:Ensure(gk) end
 
 ---------------------------------------------------------------------------
 -- Service layer – Services/SessionService.lua
@@ -244,6 +319,22 @@ function PPSession:RecordItemAward(itemLink, itemID, awardedTo, pointsSpent, res
 
 ---@class PPRosterService
 local PPRosterService = {}
+
+---@param targets table<string, integer>  fullName → new score
+---@param gk? string
+function PPRosterService:SetScores(targets, gk) end
+
+---@param deltas table<string, integer>  fullName → delta
+---@param gk? string
+function PPRosterService:AddScores(deltas, gk) end
+
+---@param resets table<string, {base: integer?, rm: boolean?}>
+---@param gk? string
+function PPRosterService:ResetEntries(resets, gk) end
+
+---@param gk? string
+---@param broadcast? boolean
+function PPRosterService:Commit(gk, broadcast) end
 
 ---@param fullName string  "Name-Realm"
 function PPRosterService:Add(fullName) end
@@ -416,6 +507,31 @@ function PPAddon:IsRaidLeaderOrAssist() end
 ---@return boolean
 function PPAddon:IsRaidLeader() end
 
+--- Leader of the current group, raid or party.
+---@return boolean
+function PPAddon:IsGroupLeader() end
+
+--- Officer ledger sync (Modules/OfficerSync.lua), OFFICER channel.
+---@param gk string
+---@param fast? boolean  session start: peers reply within ~1 s
+function PPAddon:SendLedgerHello(gk, fast) end
+---@param gk string
+---@param answering? table[]  summaries to answer: send only differing authors; nil = full ledger
+function PPAddon:SendLedgerState(gk, answering) end
+---@param gk string
+---@param names table<string, boolean>
+function PPAddon:SendLedgerOps(gk, names) end
+---@param gk string
+function PPAddon:ScheduleLoginLedgerHello(gk) end
+function PPAddon:HandleLedgerMessage(msgType, data, sender, distribution) end
+--- Unit tokens for every group member, including the player.
+---@return string[]
+function PPAddon:GetGroupUnits() end
+
+---@param sender string  "Name-Realm"
+---@return boolean
+function PPAddon:IsSenderGroupLeader(sender) end
+
 ---@return boolean
 function PPAddon:CanModify() end
 
@@ -530,11 +646,13 @@ function PPAddon:GetPlayerAwardedLoot(fullName) end
 
 -- Modules/Sync.lua --------------------------------------------------------
 
---- Send an addon comm message. Whispers `target` if provided, else broadcasts to RAID/PARTY.
----@param msgType string   PP.MSG.*
----@param data    table
----@param target? string   player name for point-to-point whisper
-function PPAddon:SendAddonMessage(msgType, data, target) end
+--- Send an addon comm message. Uses `channel` if given (e.g. "OFFICER"),
+--- else whispers `target` if provided, else broadcasts to RAID/PARTY.
+---@param msgType  string   PP.MSG.*
+---@param data     table
+---@param target?  string   player name for point-to-point whisper
+---@param channel? string   explicit distribution
+function PPAddon:SendAddonMessage(msgType, data, target, channel) end
 
 ---@param prefix       string
 ---@param message      string

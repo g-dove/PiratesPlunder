@@ -219,9 +219,17 @@ end
 
 ---------------------------------------------------------------------------
 -- BumpRosterVersion(guildKey)
+-- On a ledger client the version is derived, so the bump is a ledger Touch.
 ---------------------------------------------------------------------------
 function PP.Repo.Roster:BumpRosterVersion(guildKey)
-    local gd = self:GetData(guildKey or PP:GetActiveGuildKey())
+    guildKey = guildKey or PP:GetActiveGuildKey()
+    local ledger = PP.Repo.Ledger:GetActive(guildKey)
+    if ledger then
+        PP.Repo.Ledger:Touch(ledger)
+        PP.Repo.Ledger:Rebuild(guildKey)
+        return
+    end
+    local gd = self:GetData(guildKey)
     if gd then gd.rosterVersion = gd.rosterVersion + 1 end
 end
 

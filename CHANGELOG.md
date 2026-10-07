@@ -1,5 +1,32 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Officer roster ledger** (`Repository/LedgerRepository.lua`, `PP.Repo.Ledger`). Officers keep their guild's scores as one running total per (player, author) plus a last-writer-wins reset per player, so concurrent edits by different officers merge instead of one overwriting the other. `gd.roster` is rebuilt from it and keeps its shape, so the UI, loot logic and snapshots are unchanged. Created on first login as an officer, seeded from the current roster (the officer copy with the highest legacy `rosterVersion` wins once). Design: `docs/plans/compact-ledger.md`.
+- **Officer sync over the guild OFFICER channel** (`Modules/OfficerSync.lua`) — no group needed. New message types `LEDGER_HELLO` (sent at login, on session start and from "Request Sync"), `LEDGER_STATE` (delta reply carrying only the authors that differ; full copy from "Broadcast Roster") and `LEDGER_OPS` (each score edit, live). A gap in an officer's change sequence triggers a fresh HELLO.
+- `tests/ledger_spec.lua`: offline checks for the ledger merge logic (`lua tests/ledger_spec.lua`).
+- Optional `ledger = true` field on `ROSTER_UPDATE`, `GROUP_SCORE` and `LOOT_AWARD`, marking senders whose changes reach officers through the ledger.
+- `PP:IsGroupLeader()`, `PP:GetGroupUnits()`, `PP:IsSenderGroupLeader(sender)`: leader checks that work in a party as well as a raid.
+- `PP.Session:CloseOrphans`, `SweepStale`, `EndStale`, `IsLeaderInGroup`; `PP.SESSION_END.ORPHAN_CLEANUP`, `PP.SESSION_END_SOFT`, `PP.SESSION_MAX_AGE`.
+
+### Changed
+- `rosterVersion` on officers is derived from the ledger (`1000000 + seed version + total changes`), so every officer with the same data reports the same version and each edit raises it by exactly 1. Raiders keep their counter and accept the first derived version they see.
+- Roster score writes go through `PP.Roster:SetScores` / `AddScores` / `ResetEntries` + `Commit` instead of editing `roster[name].score` directly.
+- "Request Sync" works without an active session and is answered by the party leader too; for officers it also syncs with other online officers outside a group. "Broadcast Roster" works for a party leader and also sends the full ledger to officers. Settings text updated to match.
+- Creating a session requires being the raid leader (previously any officer in a raid could create a session only their own client knew about).
+- `activeSessionVersion` only advances on changes the raid hears about (officer-ended session by the leader, create, delete); local-only ends keep it, so clients stay level with the leader. One-time migration resets every stored `activeSessionVersion` to 0 to clear existing drift.
+- An equal `activeSessionVersion` from the leader re-adopts a session this client ended on its own (left group, leader left, startup check, orphan cleanup); session records installed from peers are only active if they match the current session pointer.
+- A pending end after leaving the raid is cancelled only by rejoining a group that contains the session leader; joining any other group (dungeon party, LFR) lets it end after 30 s.
+- `SESSION_SYNC_REPLY` merges the session leader, picking up a leader hand-off that happened while offline.
+- Roster names for auto-populate and trades resolve the character's real name by GUID, so disguises (toys, costumes, quest illusions) don't create bogus roster entries.
+
+### Fixed
+- Sessions staying active for days: records flagged active but no longer the current session ("orphans", caused by `activeSessionVersion` drift) are closed at login and after syncs, and no new ones are created.
+- At login, active sessions are ended under **every** roster when not grouped, when older than 16 hours, or when the session leader isn't in the group — previously only the selected roster was checked.
+- Joining someone else's raid (LFR, a pug) no longer adopts its leader as the session leader, which kept the session alive and could award boss-kill points for that raid; the session ends instead.
+- `SYNC_FULL`, `ROSTER_UPDATE`, `SCORE_UPDATE` and `GROUP_SCORE` are only applied from the current group leader. Previously any group member — or, for `SYNC_FULL`, anyone whispering — could replace the roster with a higher version.
+
 ## [1.0.0] - 2026-08-15
 
 ### Changed

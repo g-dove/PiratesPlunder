@@ -44,6 +44,10 @@ PiratesPlunder.MSG = {
     SNAPSHOT_REPLY    = "SNP_REP",
     SESSION_SYNC_REQUEST = "SES_SRQ",
     SESSION_SYNC_REPLY   = "SES_SRP",
+    -- Officer ledger sync (OFFICER channel only; see Modules/OfficerSync.lua)
+    LEDGER_HELLO      = "LDG_HEL",
+    LEDGER_STATE      = "LDG_STA",
+    LEDGER_OPS        = "LDG_OPS",
 }
 
 PiratesPlunder.RESPONSE = {
@@ -452,6 +456,36 @@ function PiratesPlunder:IsRaidLeader()
     return self:GetMyRaidRank() == 2
 end
 
+-- Leader of the current group, raid or party. IsRaidLeader() is raid-only.
+function PiratesPlunder:IsGroupLeader()
+    if self._sandbox then return true end
+    return IsInGroup() and UnitIsGroupLeader("player") == true
+end
+
+-- Unit tokens for every member of the current group, including the player.
+function PiratesPlunder:GetGroupUnits()
+    local units = {}
+    local n = GetNumGroupMembers()
+    if IsInRaid() then
+        for i = 1, n do units[#units + 1] = "raid" .. i end
+    elseif IsInGroup() then
+        units[1] = "player"
+        for i = 1, n - 1 do units[#units + 1] = "party" .. i end
+    end
+    return units
+end
+
+-- True if sender ("Name-Realm") currently leads our group, raid or party.
+function PiratesPlunder:IsSenderGroupLeader(sender)
+    if not sender then return false end
+    for _, unit in ipairs(self:GetGroupUnits()) do
+        if UnitIsGroupLeader(unit) then
+            return self:GetUnitFullName(unit) == sender
+        end
+    end
+    return false
+end
+
 function PiratesPlunder:CanModify()
     if self._sandbox then return self._sandboxModOverride ~= false end
     local activeKey = self:GetActiveGuildKey()
@@ -684,6 +718,12 @@ end
 
 function PiratesPlunder:OnGuildRosterUpdate()
     self:RefreshOfficerStatus()
+    -- Officers keep a ledger for their guild's roster; created on first run,
+    -- and rebuilt here in case legacy writes touched gd.roster meanwhile.
+    local myGuild = self:GetPlayerGuild()
+    if PP.Repo.Ledger:Ensure(myGuild) then
+        self:ScheduleLoginLedgerHello(myGuild)
+    end
     self:RefreshMainWindow()
     if self._pendingSyncOnGuildLoad and IsInGroup() then
         self._pendingSyncOnGuildLoad = false

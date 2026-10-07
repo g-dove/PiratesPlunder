@@ -173,6 +173,9 @@ function PP.Session:Create(raidName)
 
     PP:Print("Session created: " .. raidName)
     PP:BroadcastSessionCreate(sessionID)
+    -- Catch up with the other officers' ledgers; replies land in a second or
+    -- two, well before the first loot. The session doesn't wait for them.
+    PP:SendLedgerHello(gk, true)
     PP:RefreshMainWindow()
 end
 
@@ -261,17 +264,8 @@ function PP.Session:IsLeaderInGroup(guildKey, sessionID)
     if not s or not s.leader then return nil end
     if not IsInGroup() then return false end
 
-    local units = {}
-    local n = GetNumGroupMembers()
-    if IsInRaid() then
-        for i = 1, n do units[#units + 1] = "raid" .. i end
-    else
-        units[1] = "player"
-        for i = 1, n - 1 do units[#units + 1] = "party" .. i end
-    end
-
     local unresolved = false
-    for _, unit in ipairs(units) do
+    for _, unit in ipairs(PP:GetGroupUnits()) do
         local name = PP:GetUnitFullName(unit)
         if name == s.leader then return true end
         if not name then unresolved = true end
