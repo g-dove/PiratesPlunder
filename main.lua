@@ -128,6 +128,17 @@ function PiratesPlunder:OnInitialize()
         self.db.global.guilds["__unguilded__"] = nil
     end
 
+    -- activeSessionVersion used to advance on every local session end, so
+    -- receivers' counters drifted far past their leaders' and leader broadcasts
+    -- were rejected as stale. Now that only announced changes advance it, put
+    -- everyone back on a level start once.
+    if not self.db.global.migrated_session_version_reset then
+        for _, gd in pairs(self.db.global.guilds or {}) do
+            gd.activeSessionVersion = 0
+        end
+        self.db.global.migrated_session_version_reset = true
+    end
+
     self:RegisterChatCommand("pp", "SlashCommand")
     self:RegisterChatCommand("piratesplunder", "SlashCommand")
 
@@ -228,9 +239,38 @@ function PiratesPlunder:GetShortName(fullName)
 end
 
 function PiratesPlunder:GetPlayerFullName()
+    local trueName = self:GetUnitFullName("player")
+    if trueName then return trueName end
     local name, realm = UnitFullName("player")
     realm = realm or GetRealmName():gsub("%s+", "")
     return name .. "-" .. realm
+end
+
+-- Resolve a unit's real "Name-Realm". UnitName() can return a disguised
+-- name (toys, costumes, quest illusions), so look the character up by GUID
+-- first, then fall back to the raid roster, then UnitName as a last resort.
+function PiratesPlunder:GetUnitFullName(unit)
+    if not unit then return nil end
+    local guid = UnitGUID(unit)
+    if guid and GetPlayerInfoByGUID then
+        local _, _, _, _, _, name, realm = GetPlayerInfoByGUID(guid)
+        if name and name ~= "" and name ~= UNKNOWNOBJECT then
+            if realm and realm ~= "" then
+                return name .. "-" .. realm:gsub("[%s%-]", "")
+            end
+            return self:GetFullName(name)
+        end
+    end
+    local raidIndex = unit:match("^raid(%d+)$")
+    if raidIndex then
+        local name = GetRaidRosterInfo(tonumber(raidIndex))
+        if name and name ~= "" and name ~= UNKNOWNOBJECT then
+            return self:GetFullName(name)
+        end
+    end
+    local name, realm = UnitName(unit)
+    if not name or name == "" or name == UNKNOWNOBJECT then return nil end
+    return self:GetFullName(name .. (realm and realm ~= "" and ("-" .. realm) or ""))
 end
 
 ---------------------------------------------------------------------------
@@ -436,9 +476,19 @@ function PiratesPlunder:CanPostLoot()
 end
 
 function PiratesPlunder:CheckActiveRaid()
-    if PP.Repo.Roster:HasActiveSession() and not IsInGroup() then
-        PP.Session:End(PP.SESSION_END.STARTUP_CHECK)
+    -- Every guild key, not just the active one: stale sessions and orphans can
+    -- sit under a roster that isn't selected right now.
+    local closedAny = PP.Session:SweepStale(true) > 0
+    for _, gk in ipairs(PP.Repo.Roster:GetAllGuildKeys()) do
+        local closed = PP.Session:CloseOrphans(gk)
+        if closed > 0 then
+            closedAny = true
+            if PP._debug then
+                self:Print("[Sync] Closed " .. closed .. " orphaned session(s) for " .. self:GetRosterDisplayName(gk))
+            end
+        end
     end
+    if closedAny then self:RefreshMainWindow() end
     if not PP.Repo.Roster:HasActiveSession() and next(PP.Repo.Loot:GetAll()) ~= nil then
         PP.Repo.Loot:WipeAll()
         self:RefreshLootResponseFrame()
@@ -524,7 +574,11 @@ function PiratesPlunder:OnGroupRosterUpdate()
         PP._versionCheckData = nil
     end
 
-    if self.db.global.pendingSessionEnd and nowInGroup then
+    -- Back in a group with the session leader: keep the session. Any other
+    -- group (a dungeon party, LFR) leaves the pending end timer running.
+    local pending = self.db.global.pendingSessionEnd
+    if pending and nowInGroup
+       and PP.Session:IsLeaderInGroup(pending.guildKey, pending.sessionID) then
         self.db.global.pendingSessionEnd = nil
         if self._pendingSessionEndTimer then
             self:CancelTimer(self._pendingSessionEndTimer)
@@ -537,6 +591,10 @@ function PiratesPlunder:OnGroupRosterUpdate()
         if leaderGuild then
             self._activeGuildKey = leaderGuild
         end
+    end
+
+    if nowInGroup and PP.Session:SweepStale(false) > 0 then
+        self:RefreshMainWindow()
     end
 
     if PP.Repo.Roster:HasActiveSession() and IsInRaid() then
@@ -562,12 +620,8 @@ function PiratesPlunder:OnGroupLeft()
             local activeGuildKey = self:GetActiveGuildKey()
             self.db.global.pendingSessionEnd = { sessionID = id, guildKey = activeGuildKey }
             self._pendingSessionEndTimer = self:ScheduleTimer(function()
-                if not IsInGroup() then
-                    self:CompletePendingSessionEnd()
-                else
-                    self.db.global.pendingSessionEnd = nil
-                    self._pendingSessionEndTimer = nil
-                end
+                self._pendingSessionEndTimer = nil
+                self:_ResolvePendingSessionEnd()
             end, 30)
             return
         end
@@ -577,20 +631,45 @@ function PiratesPlunder:OnGroupLeft()
     self._activeGuildKey = self:GetPlayerGuild() or nil
 end
 
+-- Keeps the pending session if we're grouped with its leader again (or can't
+-- tell yet), otherwise ends it. Returns true if the session was kept.
+function PiratesPlunder:_ResolvePendingSessionEnd()
+    local pending = self.db.global.pendingSessionEnd
+    if not pending then return false end
+    if IsInGroup()
+       and PP.Session:IsLeaderInGroup(pending.guildKey, pending.sessionID) ~= false then
+        self.db.global.pendingSessionEnd = nil
+        if self._pendingSessionEndTimer then
+            self:CancelTimer(self._pendingSessionEndTimer)
+            self._pendingSessionEndTimer = nil
+        end
+        return true
+    end
+    self:CompletePendingSessionEnd()
+    return false
+end
+
 function PiratesPlunder:CompletePendingSessionEnd()
     if self._pendingSessionEndTimer then
         self:CancelTimer(self._pendingSessionEndTimer)
         self._pendingSessionEndTimer = nil
     end
+    local pending = self.db.global.pendingSessionEnd
     self.db.global.pendingSessionEnd = nil
 
-    if PP.Repo.Roster:HasActiveSession() then
-        PP.Session:End(PP.SESSION_END.LEFT_GROUP)
+    -- End the session that was pending, under its own roster: joining another
+    -- raid may already have switched the selected roster to that raid's guild.
+    local gk = (pending and pending.guildKey) or self:GetActiveGuildKey()
+    local gd = PP.Repo.Roster:GetData(gk)
+    local id = gd and gd.activeSessionID
+    local s  = id and gd.sessions and gd.sessions[id]
+    if s and s.active and not (pending and pending.sessionID and pending.sessionID ~= id) then
+        PP.Session:EndStale(gk, PP.SESSION_END.LEFT_GROUP)
         if IsInGroup() then
             self:ScheduleTimer(function() self:RequestSessionSync() end, 1)
         end
     end
-    self._activeGuildKey = self:GetPlayerGuild() or nil
+    self._activeGuildKey = (IsInRaid() and self:GetRaidLeaderGuild()) or self:GetPlayerGuild() or nil
 end
 
 function PiratesPlunder:ShowLootResponseFrameIfNeeded()
@@ -664,12 +743,11 @@ function PiratesPlunder:OnPlayerEnteringWorld(_, isInitialLogin, isReloadingUi)
 
     if self.db.global.pendingSessionEnd then
         if IsInGroup() then
-            self.db.global.pendingSessionEnd = nil
-            if self._pendingSessionEndTimer then
-                self:CancelTimer(self._pendingSessionEndTimer)
-                self._pendingSessionEndTimer = nil
-            end
-            self:ScheduleTimer(function() PP.Loot:Restore() end, 3)
+            -- The group roster may not be loaded yet at this point; decide once
+            -- it is.
+            self:ScheduleTimer(function()
+                if self:_ResolvePendingSessionEnd() then PP.Loot:Restore() end
+            end, 3)
         else
             self:CompletePendingSessionEnd()
         end

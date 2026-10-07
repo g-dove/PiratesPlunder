@@ -113,13 +113,17 @@ function PP.Repo.Roster:SetActiveSessionID(gk, id)
 end
 
 ---------------------------------------------------------------------------
--- ClearActiveSessionID(gk)
+-- ClearActiveSessionID(gk, keepVersion)
+-- keepVersion: clear the pointer without advancing activeSessionVersion, for
+-- local-only teardowns the rest of the raid won't hear about.
 ---------------------------------------------------------------------------
-function PP.Repo.Roster:ClearActiveSessionID(gk)
+function PP.Repo.Roster:ClearActiveSessionID(gk, keepVersion)
     local gd = self:GetData(gk)
     if gd then
-        gd.activeSessionID      = nil
-        gd.activeSessionVersion = (gd.activeSessionVersion or 0) + 1
+        gd.activeSessionID = nil
+        if not keepVersion then
+            gd.activeSessionVersion = (gd.activeSessionVersion or 0) + 1
+        end
     end
 end
 

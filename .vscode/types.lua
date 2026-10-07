@@ -52,6 +52,7 @@
 ---@field SYNC_FULL      string
 ---@field STARTUP_CHECK  string
 ---@field RESET          string
+---@field ORPHAN_CLEANUP string
 
 ---@class PPMinimapIconConfig
 ---@field hide              boolean       whether the button is hidden
@@ -93,7 +94,8 @@ function PPRosterRepo:GetAllGuildKeys() end
 function PPRosterRepo:SetActiveSessionID(gk, id) end
 
 ---@param gk string
-function PPRosterRepo:ClearActiveSessionID(gk) end
+---@param keepVersion? boolean  clear the pointer without advancing activeSessionVersion
+function PPRosterRepo:ClearActiveSessionID(gk, keepVersion) end
 
 ---@param gk string
 ---@param sessionID string
@@ -202,6 +204,28 @@ function PPSession:Delete(raidID) end
 
 function PPSession:CheckLeaderPresent() end
 
+--- Mark ended any record flagged active that isn't gd.activeSessionID.
+---@param guildKey string
+---@return integer closed
+function PPSession:CloseOrphans(guildKey) end
+
+--- true/false whether the session leader is in our group; nil if undeterminable.
+---@param guildKey  string
+---@param sessionID string
+---@return boolean|nil
+function PPSession:IsLeaderInGroup(guildKey, sessionID) end
+
+--- End the active session under any roster; non-selected rosters skip loot teardown.
+---@param guildKey string
+---@param reason   string  PP.SESSION_END.*
+---@return boolean ended
+function PPSession:EndStale(guildKey, reason) end
+
+--- End active sessions under every roster that can't still be running.
+---@param atLogin boolean  also apply not-grouped and SESSION_MAX_AGE checks
+---@return integer ended
+function PPSession:SweepStale(atLogin) end
+
 ---@param encounterID   number
 ---@param encounterName string
 function PPSession:AddBoss(encounterID, encounterName) end
@@ -287,7 +311,9 @@ function PPLootService:_CancelIdleClear() end
 ---@field MSG           PPMsgConstants
 ---@field RESPONSE      PPResponseConstants
 ---@field SESSION_END   PPSessionEndConstants
----@field Repo          PPRepo
+---@field SESSION_END_SOFT table<string, boolean>
+---@field SESSION_MAX_AGE  integer             seconds; older active sessions end at login
+---@field Repo         PPRepo
 ---@field Session       PPSession
 ---@field Roster        PPRosterService
 ---@field Loot          PPLootService

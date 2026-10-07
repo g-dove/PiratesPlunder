@@ -215,14 +215,30 @@ end
 -- activeSessionID, activeSessionVersion). Receivers run this helper before
 -- handling the message so they always converge on the leader's session even
 -- if they missed SESSION_CREATE (e.g. mid-load, in a different guild). The
--- version monotonically rises whenever SetActiveSessionID/ClearActiveSessionID
--- is called on the leader's client, so older versions are ignored as stale.
+-- version rises only on changes the raid hears about (leader create, announced
+-- close, delete), so older versions are ignored as stale. An equal version is
+-- accepted only to re-adopt a session we dropped locally (see below).
 ---------------------------------------------------------------------------
+
+-- True when the sender's session at our own version is one we let go of on
+-- our own (left group, startup check, orphan cleanup) rather than one we were
+-- told had ended. Since local-only ends no longer advance the version, a
+-- rejoining player sits at the leader's version with no pointer set.
+local function _isLocallyDropped(gd, sessionID)
+    if not sessionID then return false end
+    if gd.deletedSessions and gd.deletedSessions[sessionID] then return false end
+    local s = gd.sessions[sessionID]
+    if gd.activeSessionID == sessionID and s and s.active then return false end
+    if not s or s.active then return true end
+    return PP.SESSION_END_SOFT[s.endReason] == true
+end
+
 function PP:_adoptSessionContext(guildKey, activeSessionID, activeSessionVersion)
     if not guildKey or not activeSessionVersion then return end
     local gd = PP.Repo.Roster:EnsureData(guildKey)
     local localVer = gd.activeSessionVersion or 0
-    if activeSessionVersion <= localVer then return end
+    if activeSessionVersion < localVer then return end
+    if activeSessionVersion == localVer and not _isLocallyDropped(gd, activeSessionID) then return end
 
     local existingID = gd.activeSessionID
     if activeSessionID then
@@ -233,8 +249,9 @@ function PP:_adoptSessionContext(guildKey, activeSessionID, activeSessionVersion
         gd.activeSessionID      = activeSessionID
         gd.activeSessionVersion = activeSessionVersion
         if gd.sessions[activeSessionID] and not gd.sessions[activeSessionID].active then
-            gd.sessions[activeSessionID].active  = true
-            gd.sessions[activeSessionID].endTime = nil
+            gd.sessions[activeSessionID].active    = true
+            gd.sessions[activeSessionID].endTime   = nil
+            gd.sessions[activeSessionID].endReason = nil
         end
         if IsInRaid() then self._activeGuildKey = guildKey end
         -- A pending end timer for this session is now obsolete (we just learned
@@ -247,8 +264,12 @@ function PP:_adoptSessionContext(guildKey, activeSessionID, activeSessionVersion
                 self._pendingSessionEndTimer = nil
             end
         end
-    elseif existingID then
-        PP.Session:End(PP.SESSION_END.SYNC_FULL, existingID, guildKey)
+    else
+        if existingID then
+            PP.Session:End(PP.SESSION_END.SYNC_FULL, existingID, guildKey)
+        end
+        -- Record the version even with nothing to tear down, so we stay level
+        -- with the leader after a close we already applied locally.
         gd.activeSessionVersion = activeSessionVersion
     end
 end
@@ -267,6 +288,10 @@ function PP:_ensureSessionRecord(guildKey, sessionID, sessionData)
     local gd = PP.Repo.Roster:EnsureData(guildKey)
     if gd.sessions[sessionID] then return true end
     if not sessionData then return false end
+    -- Only the session our pointer names may be active; anything else would be
+    -- an orphan no teardown path ever reaches. _adoptSessionContext revives the
+    -- record if the pointer moves to it later.
+    local isCurrent = (gd.activeSessionID == sessionID)
     gd.sessions[sessionID] = {
         name      = sessionData.name,
         startTime = sessionData.startTime,
@@ -275,8 +300,9 @@ function PP:_ensureSessionRecord(guildKey, sessionID, sessionData)
         items     = {},
         bosses    = {},
         members   = {},
-        active    = true,
-        endTime   = nil,
+        active    = isCurrent,
+        endTime   = (not isCurrent) and (sessionData.startTime or time()) or nil,
+        endReason = (not isCurrent) and PP.SESSION_END.ORPHAN_CLEANUP or nil,
     }
     return true
 end
@@ -602,7 +628,10 @@ function PP:HandleSyncFull(data, sender, distribution)
             end
             local incomingSessionVer = incoming.activeSessionVersion or 0
             local localSessionVer    = local_gd.activeSessionVersion or 0
-            if incoming.activeSessionID and incomingSessionVer >= localSessionVer then
+            local acceptIncoming = incomingSessionVer > localSessionVer
+                or (incomingSessionVer == localSessionVer
+                    and _isLocallyDropped(local_gd, incoming.activeSessionID))
+            if incoming.activeSessionID and acceptIncoming then
                 local incomingID = incoming.activeSessionID
                 local existingID = local_gd.activeSessionID
                 if existingID and existingID ~= incomingID
@@ -613,8 +642,9 @@ function PP:HandleSyncFull(data, sender, distribution)
                 local_gd.activeSessionID      = incomingID
                 local_gd.activeSessionVersion = incomingSessionVer
                 if local_gd.sessions[incomingID] and not local_gd.sessions[incomingID].active then
-                    local_gd.sessions[incomingID].active  = true
-                    local_gd.sessions[incomingID].endTime = nil
+                    local_gd.sessions[incomingID].active    = true
+                    local_gd.sessions[incomingID].endTime   = nil
+                    local_gd.sessions[incomingID].endReason = nil
                 end
                 if self.db.global.pendingSessionEnd
                     and self.db.global.pendingSessionEnd.sessionID == incomingID then
@@ -635,6 +665,9 @@ function PP:HandleSyncFull(data, sender, distribution)
                 PP.Session:End(PP.SESSION_END.SYNC_FULL, local_gd.activeSessionID, gk)
                 local_gd.activeSessionVersion = incomingSessionVer
             end
+            -- The session merge above copies peers' records verbatim, including
+            -- ones still flagged active that aren't our current session.
+            PP.Session:CloseOrphans(gk)
         end
     end
     -- Apply raid settings carried in the sync payload.  RAID_SETTINGS broadcast
@@ -754,8 +787,16 @@ function PP:HandleSessionSyncReply(data, sender, distribution)
         local local_session = gd.sessions[data.activeSessionID]
         if not local_session then
             gd.sessions[data.activeSessionID] = data.session
+            -- If _adoptSessionContext rejected the context above, this record
+            -- isn't our current session and must not stay flagged active.
+            PP.Session:CloseOrphans(data.guildKey)
         else
             local incoming = data.session
+            -- Picks up a leader hand-off that happened while we were offline;
+            -- a stale leader here would trip the leader-absent checks.
+            if incoming.leader then
+                local_session.leader = incoming.leader
+            end
             if incoming.items and #incoming.items > #(local_session.items or {}) then
                 local_session.items = incoming.items
             end
@@ -909,12 +950,18 @@ function PP:HandleSessionClose(data, sender)
     if not gd then return end
     local session = gd.sessions[data.raidID]
     if session then
-        session.active  = false
-        session.endTime = time()
+        session.active    = false
+        session.endTime   = time()
+        -- Overwrite any local soft end (e.g. LEFT_GROUP) so the record can't be
+        -- re-adopted by an equal-version context; the leader closed it.
+        session.endReason = PP.SESSION_END.SYNC_RECEIVED
     end
     if gd.activeSessionID == data.raidID then
         PP.Session:End(PP.SESSION_END.SYNC_RECEIVED, data.raidID, gk)
     end
+    -- Our End() above doesn't advance activeSessionVersion; take the leader's
+    -- post-close version so we stay level with it.
+    self:_adoptSessionContext(gk, data.activeSessionID, data.activeSessionVersion)
     -- Apply snapshot last so our own End() (which captures a local snapshot at
     -- our current rosterVersion) cannot overwrite the officer's broadcast copy
     -- if theirs is newer. SetSessionSnapshot already arbitrates by version.

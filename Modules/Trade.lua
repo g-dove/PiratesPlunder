@@ -9,9 +9,8 @@ local PP = LibStub("AceAddon-3.0"):GetAddon("PiratesPlunder")
 ---------------------------------------------------------------------------
 function PP:OnTradeShow()
     -- Determine who we are trading with
-    local name, realm = UnitName("npc")
-    if not name then return end
-    local tradeFullName = PP:GetFullName(name .. (realm and realm ~= "" and ("-" .. realm) or ""))
+    local tradeFullName = PP:GetUnitFullName("npc")
+    if not tradeFullName then return end
     self._currentTradePartner = tradeFullName
     self._currentTradeSlotted = {}  -- entries we placed in this trade window
 
