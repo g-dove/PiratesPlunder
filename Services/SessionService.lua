@@ -116,6 +116,10 @@ function PP.Session:Create(raidName)
         PP:Print("Only officers can create a session.")
         return
     end
+    if not PP:IsRaidLeader() then
+        PP:Print("Only the raid leader can create a session.")
+        return
+    end
     if PP.Repo.Roster:HasActiveSession() then
         PP:Print("A session is already active. Close it before creating a new one.")
         return
