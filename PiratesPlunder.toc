@@ -1,4 +1,5 @@
-## Interface: 120100, 120001, 120005, 120000
+## Interface: 120100, 120105
+
 ## Title: Pirates Plunder
 ## Author: Lucidify
 ## Version: 1.0.5
