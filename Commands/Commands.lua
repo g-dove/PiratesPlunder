@@ -13,6 +13,7 @@ table.insert(PP._commandGroups, function(input)
         PP:Print("/pp loot (or /pp l) – Toggle loot-master window")
         PP:Print("/pp loot clear – Clear stuck loot from your display (local only)")
         PP:Print("/pp response (or /pp r) – Toggle loot response frame")
+        PP:Print("/pp history (or /pp h) – Items awarded this session and their responses")
         PP:Print("/pp version (or /pp v) – Check addon versions across the raid")
         PP:Print("/pp sandbox (or /pp s) – Toggle sandbox mode")
         PP:Print("/pp sandbox mod (or /pp s m) – Toggle canModify override in sandbox")
@@ -34,6 +35,10 @@ table.insert(PP._commandGroups, function(input)
         else
             PP:Print("You must be raid leader/assistant with an active session to use /pp loot.")
         end
+        return true
+
+    elseif input == "history" or input == "h" then
+        PP:ToggleLootHistoryWindow()
         return true
 
     elseif input == "response" or input == "r" then

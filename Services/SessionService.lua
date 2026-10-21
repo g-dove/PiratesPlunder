@@ -57,6 +57,7 @@ function PP.Session:End(reason, sessionID, guildKey)
     PP.Repo.Roster:MarkSessionEnded(guildKey, sessionID, time(), reason)
     PP.Repo.Roster:ClearActiveSessionID(guildKey, not announce)
     PP.Repo.Loot:WipeAll()
+    PP.Repo.Loot:WipeHistory(guildKey, sessionID)
     PP:CloseLootPopups()
 
     -- Capture a roster snapshot tagged with the current rosterVersion. Every
@@ -105,6 +106,7 @@ function PP.Session:End(reason, sessionID, guildKey)
     PP:RefreshMainWindow()
     PP:RefreshLootMasterWindow()
     PP:RefreshLootResponseFrame()
+    PP:RefreshLootHistoryWindow()
 end
 
 ---------------------------------------------------------------------------
@@ -136,6 +138,7 @@ function PP.Session:Create(raidName)
     end
 
     PP:WipeRetryQueue()
+    PP.Repo.Loot:WipeHistory()
 
     local sessionID = tostring(time()) .. "-" .. math.random(1000, 9999)
     local leader    = PP:GetPlayerFullName()
@@ -485,4 +488,28 @@ function PP.Session:RecordItemAward(itemLink, itemID, awardedTo, pointsSpent, re
         time        = time(),
         key         = lootKey,
     }
+end
+
+---------------------------------------------------------------------------
+-- UpdateItemAward(lootKey, awardedTo, pointsSpent, response, reassignedFrom,
+--                 guildKey?, sessionID?)
+-- Rewrites the recipient of an already-recorded award (reassign). Defaults to
+-- the active session. Returns true if a record with that loot key was found.
+---------------------------------------------------------------------------
+function PP.Session:UpdateItemAward(lootKey, awardedTo, pointsSpent, response, reassignedFrom, guildKey, sessionID)
+    local gd = PP.Repo.Roster:GetData(guildKey or PP:GetActiveGuildKey())
+    sessionID = sessionID or (gd and gd.activeSessionID)
+    local session = gd and sessionID and gd.sessions[sessionID]
+    if not session or not lootKey then return false end
+    for i = #session.items, 1, -1 do
+        local item = session.items[i]
+        if item.key == lootKey then
+            item.awardedTo      = awardedTo
+            item.pointsSpent    = pointsSpent or 0
+            item.response       = response or PP.RESPONSE.NEED
+            item.reassignedFrom = reassignedFrom
+            return true
+        end
+    end
+    return false
 end

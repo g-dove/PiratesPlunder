@@ -44,6 +44,7 @@ PiratesPlunder.MSG = {
     SNAPSHOT_REPLY    = "SNP_REP",
     SESSION_SYNC_REQUEST = "SES_SRQ",
     SESSION_SYNC_REPLY   = "SES_SRP",
+    LOOT_REASSIGN        = "LOT_RSN",
 }
 
 PiratesPlunder.RESPONSE = {
@@ -61,6 +62,7 @@ local defaults = {
         guilds = {},
         pendingLootCache = {},
         pendingTradesCache = {},
+        lootHistoryCache = {},
         officerRankThreshold = 1,
         migrated_v2 = false,
         allowTransmogRolls = true,
@@ -146,6 +148,7 @@ function PiratesPlunder:OnInitialize()
 
     self.pendingLoot      = {}
     self.pendingTrades    = {}
+    self.lootHistory      = {}
     self.lootQueue        = {}
     self.mainWindow       = nil
     self.lootMasterWindow = nil
@@ -372,6 +375,9 @@ end
 
 function PiratesPlunder:DisableSandbox()
     if not self._sandbox then return end
+    -- Still in sandbox here, so the Save inside WipeHistory is skipped and the
+    -- real caches on disk stay untouched.
+    PP.Repo.Loot:WipeHistory("__sandbox__")
     self._sandbox     = false
     self._sandboxData = nil
     self._sandboxModOverride = nil
@@ -709,11 +715,13 @@ function PiratesPlunder:ResetAddon()
     wipe(self.db.global.guilds)
     self.db.global.pendingLootCache = {}
     self.db.global.pendingTradesCache = {}
+    self.db.global.lootHistoryCache = {}
     self.db.global.pendingSessionEnd = nil
     self.db.global.migrated_v2 = true
     self.db.global.migrated_sessions = true
     wipe(self.pendingLoot)
     wipe(self.pendingTrades)
+    wipe(self.lootHistory)
     PP:CloseLootPopups()
     if self._pendingSessionEndTimer then
         self:CancelTimer(self._pendingSessionEndTimer)

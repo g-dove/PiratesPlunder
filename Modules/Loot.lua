@@ -142,8 +142,13 @@ end
 -- Get sorted responses for an item (highest score first, random tiebreak)
 ---------------------------------------------------------------------------
 function PP:GetSortedResponses(key)
-    local entry = PP.Repo.Loot:GetEntry(key)
-    if not entry then return {} end
+    return self:SortResponses(PP.Repo.Loot:GetEntry(key))
+end
+
+-- Same as GetSortedResponses, for any table with responses/votes (e.g. a
+-- loot history entry).
+function PP:SortResponses(entry)
+    if not entry or not entry.responses then return {} end
 
     local list = {}
     for fullName, resp in pairs(entry.responses) do

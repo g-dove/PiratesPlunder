@@ -9,6 +9,15 @@ PP.Loot = PP.Loot or {}
 
 local LOOT_IDLE_CLEAR_DELAY = 60  -- seconds of no pending loot before broadcasting a clear
 
+-- Raid announcement; sandbox prints it locally instead of sending.
+local function announce(msg)
+    if PP:IsSandbox() then
+        PP:Print("|cFFFFD100[Sandbox] Raid chat:|r " .. msg)
+        return
+    end
+    C_ChatInfo.SendChatMessage(msg, IsInRaid() and "RAID" or "PARTY")
+end
+
 ---------------------------------------------------------------------------
 -- _ScheduleIdleClear() / _CancelIdleClear()
 -- After the last item is cleared, raid leader schedules a broadcast telling
@@ -172,11 +181,53 @@ function PP.Loot:Post(itemLink)
         })
     end
 
+    if PP:IsSandbox() then
+        self:_SimulateSandboxResponses(key)
+    end
+
     -- Also show the unified response popup (adds this item to it)
     PP:ShowLootResponseFrame()
 
     PP:Print("Posted for distribution: " .. itemLink)
     PP:RefreshLootMasterWindow()
+end
+
+---------------------------------------------------------------------------
+-- _SimulateSandboxResponses(key)
+-- Sandbox only. Each fake roster member answers the posted item after a
+-- short random delay with a random response (some pass, some never answer),
+-- so award / reassign / pending-trade flows can be tested solo.
+---------------------------------------------------------------------------
+function PP.Loot:_SimulateSandboxResponses(key)
+    local me = PP:GetPlayerFullName()
+    for fullName, data in pairs(PP.Repo.Roster:GetRoster()) do
+        if fullName ~= me then
+            local r = math.random(1, 10)
+            local response = (r <= 4 and PP.RESPONSE.NEED)
+                          or (r <= 6 and PP.RESPONSE.MINOR)
+                          or (r <= 8 and PP.RESPONSE.TRANSMOG)
+                          or (r == 9 and PP.RESPONSE.PASS)
+                          or nil  -- never responds
+            if response then
+                PP:ScheduleTimer(function()
+                    if not PP:IsSandbox() then return end
+                    local entry = PP.Repo.Loot:GetEntry(key)
+                    if not entry or entry.awarded then return end
+                    local resp = response
+                    if resp == PP.RESPONSE.TRANSMOG and entry.allowTransmog == false then
+                        resp = PP.RESPONSE.MINOR
+                    end
+                    -- Borrow our own gear for the equipped/ilvl columns
+                    local comp
+                    if resp == PP.RESPONSE.NEED or resp == PP.RESPONSE.MINOR then
+                        comp = PP:GetEquippedComparisonData(entry.itemLink)
+                    end
+                    PP:ReceiveLootInterest(key, fullName, resp, data.score or 0, comp)
+                end, 0.5 + math.random() * 2.5)
+            end
+        end
+    end
+    PP:Print("|cFFFFD100[Sandbox] Fake raid members are responding to this item.|r")
 end
 
 ---------------------------------------------------------------------------
@@ -206,6 +257,64 @@ function PP.Loot:Cancel(key)
 end
 
 ---------------------------------------------------------------------------
+-- _ChargeWinner(fullName, response, free)
+-- Applies the award cost to fullName's current score: TRANSMOG costs 1 pt,
+-- MINOR drops to 1 below the next person, NEED zeroes the score, free keeps
+-- it. Returns pointsSpent, newScore (newScore nil if not on the roster).
+---------------------------------------------------------------------------
+function PP.Loot:_ChargeWinner(fullName, response, free)
+    local roster = PP.Repo.Roster:GetRoster()
+    if not roster[fullName] then return 0, nil end
+    local currentScore = roster[fullName].score or 0
+    local pointsSpent, newScore
+    if free then
+        pointsSpent = 0
+        newScore    = currentScore
+    elseif response == PP.RESPONSE.TRANSMOG then
+        pointsSpent = 1
+        newScore    = math.max(0, currentScore - 1)
+    elseif response == PP.RESPONSE.MINOR then
+        newScore    = PP:GetMinorUpgradeScore(fullName)
+        pointsSpent = math.max(0, currentScore - newScore)
+    else  -- NEED
+        pointsSpent = currentScore
+        newScore    = 0
+    end
+    roster[fullName].score = newScore
+    return pointsSpent, newScore
+end
+
+---------------------------------------------------------------------------
+-- _RecordHistory(key, lootEntry, awardedTo, response, pointsSpent, free,
+--                guildKey?, sessionID?)
+-- Snapshots the responses of a just-awarded item into the session loot
+-- history. Runs on the loot master and on every receiver of LOOT_AWARD.
+---------------------------------------------------------------------------
+function PP.Loot:_RecordHistory(key, lootEntry, awardedTo, response, pointsSpent, free, guildKey, sessionID)
+    guildKey = guildKey or PP:GetActiveGuildKey()
+    if not sessionID then
+        local gd = PP.Repo.Roster:GetData(guildKey)
+        sessionID = gd and gd.activeSessionID
+    end
+    if not sessionID or not lootEntry then return end
+    PP.Repo.Loot:SetHistoryEntry(key, {
+        key         = key,
+        itemLink    = lootEntry.itemLink,
+        itemID      = lootEntry.itemID,
+        awardedTo   = awardedTo,
+        response    = response,
+        pointsSpent = pointsSpent or 0,
+        free        = free and true or false,
+        responses   = lootEntry.responses or {},
+        votes       = lootEntry.votes or {},
+        guildKey    = guildKey,
+        sessionID   = sessionID,
+        time        = time(),
+    })
+    PP:RefreshLootHistoryWindow()
+end
+
+---------------------------------------------------------------------------
 -- Award(key, fullName, free)
 -- Moved from PP:AwardItem() in Loot.lua.
 ---------------------------------------------------------------------------
@@ -217,35 +326,18 @@ function PP.Loot:Award(key, fullName, free)
     entry.awarded   = true
     entry.awardedTo = fullName
 
-    -- Determine cost: TRANSMOG costs 1 pt, NEED zeroes the score
     local winnerResp     = entry.responses[fullName]
     local winnerResponse = winnerResp and winnerResp.response or PP.RESPONSE.NEED
-    local pointsSpent, newScore = 0, 0
-
-    local roster = PP.Repo.Roster:GetRoster()
-    if roster[fullName] then
-        local currentScore = roster[fullName].score or 0
-        if free then
-            -- Free award: keep score exactly as-is
-            pointsSpent = 0
-            newScore    = currentScore
-        elseif winnerResponse == PP.RESPONSE.TRANSMOG then
-            pointsSpent = 1
-            newScore    = math.max(0, currentScore - 1)
-        elseif winnerResponse == PP.RESPONSE.MINOR then
-            -- Drop to 1 below the next person on the roster
-            newScore    = PP:GetMinorUpgradeScore(fullName)
-            pointsSpent = math.max(0, currentScore - newScore)
-        else  -- NEED
-            pointsSpent = currentScore
-            newScore    = 0
-        end
-        roster[fullName].score = newScore
+    local pointsSpent, newScore = self:_ChargeWinner(fullName, winnerResponse, free)
+    if newScore then
         PP.Repo.Roster:BumpRosterVersion()
+    else
+        newScore = 0
     end
 
     -- Record in session history with cost info (key stored for LOOT_STATE_QUERY matching)
     PP.Session:RecordItemAward(entry.itemLink, entry.itemID, fullName, pointsSpent, winnerResponse, key)
+    self:_RecordHistory(key, entry, fullName, winnerResponse, pointsSpent, free)
 
     -- Add to pending trades ONLY if the awardee is not the loot master
     local me = PP:GetPlayerFullName()
@@ -260,10 +352,7 @@ function PP.Loot:Award(key, fullName, free)
 
     -- Announce in raid
     local shortName = PP:GetShortName(fullName)
-    C_ChatInfo.SendChatMessage(
-        "Pirates Plunder: " .. entry.itemLink .. " awarded to " .. shortName .. "!",
-        IsInRaid() and "RAID" or "PARTY"
-    )
+    announce("Pirates Plunder: " .. entry.itemLink .. " awarded to " .. shortName .. "!")
 
     -- Single broadcast carries the score change + roster version so receivers
     -- can update scores and detect missed broadcasts; a version gap triggers
@@ -304,6 +393,104 @@ function PP.Loot:Award(key, fullName, free)
     PP:RefreshLootMasterWindow()
     PP:RefreshMainWindow()
     PP:RefreshLootResponseFrame()
+end
+
+---------------------------------------------------------------------------
+-- Reassign(key, newName, free, confirmed)
+-- Moves an already-awarded item to another player. The previous winner gets
+-- back what they spent; the new winner pays from their current score using
+-- the response they gave for the item. Raid leader only. If the item is no
+-- longer in pending trades (likely already handed over) a confirm popup is
+-- shown first; `confirmed` skips it.
+---------------------------------------------------------------------------
+function PP.Loot:Reassign(key, newName, free, confirmed)
+    if not PP:IsRaidLeader() then
+        PP:Print("Only the raid leader can reassign loot.")
+        return
+    end
+    local hist = PP.Repo.Loot:GetHistoryEntry(key)
+    local gk   = PP:GetActiveGuildKey()
+    local gd   = PP.Repo.Roster:GetData(gk)
+    if not hist or not gd or hist.guildKey ~= gk or hist.sessionID ~= gd.activeSessionID then
+        PP:Print("That item is not part of the active session.")
+        return
+    end
+    local oldName = hist.awardedTo
+    if oldName == newName then return end
+
+    local me = PP:GetPlayerFullName()
+    if not confirmed and oldName ~= me
+       and not PP.Repo.Loot:HasPendingTradeFor(hist.itemID, oldName) then
+        PP._pendingReassign = { key = key, newName = newName, free = free }
+        StaticPopup_Show("PP_CONFIRM_REASSIGN_TRADED", hist.itemLink or "This item", PP:GetShortName(oldName))
+        return
+    end
+
+    -- Refund first so MINOR pricing for the new winner sees the restored score.
+    local roster   = PP.Repo.Roster:GetRoster()
+    local refund   = hist.pointsSpent or 0
+    local oldScore
+    if roster[oldName] then
+        roster[oldName].score = (roster[oldName].score or 0) + refund
+        oldScore = roster[oldName].score
+    end
+
+    local newResp     = hist.responses and hist.responses[newName]
+    local newResponse = newResp and newResp.response or PP.RESPONSE.NEED
+    local pointsSpent, newScore = self:_ChargeWinner(newName, newResponse, free)
+    PP.Repo.Roster:BumpRosterVersion()
+
+    if not PP.Session:UpdateItemAward(key, newName, pointsSpent, newResponse, oldName) then
+        PP.Session:RecordItemAward(hist.itemLink, hist.itemID, newName, pointsSpent, newResponse, key)
+    end
+    hist.awardedTo      = newName
+    hist.response       = newResponse
+    hist.pointsSpent    = pointsSpent
+    hist.free           = free and true or false
+    hist.reassignedFrom = oldName
+    PP.Repo.Loot:SetHistoryEntry(key, hist)
+
+    -- Swap the pending trade over to the new winner
+    PP.Repo.Loot:RemovePendingTradeFor(hist.itemID, oldName)
+    if newName ~= me then
+        local trades = PP.Repo.Loot:GetPendingTrades()
+        trades[#trades + 1] = {
+            itemLink  = hist.itemLink,
+            itemID    = hist.itemID,
+            awardedTo = newName,
+        }
+        PP.Repo.Loot:Save()
+    end
+
+    local oldShort, newShort = PP:GetShortName(oldName), PP:GetShortName(newName)
+    if IsInGroup() or PP:IsSandbox() then
+        announce("Pirates Plunder: " .. oldShort .. " has been refunded " .. refund .. " points for " .. hist.itemLink .. ".")
+        announce("Pirates Plunder: " .. hist.itemLink .. " awarded to " .. newShort .. "!")
+    end
+    if IsInGroup() then
+        PP:SendAddonMessage(PP.MSG.LOOT_REASSIGN, {
+            key                  = key,
+            itemLink             = hist.itemLink,
+            itemID               = hist.itemID,
+            oldWinner            = oldName,
+            oldScore             = oldScore,
+            refund               = refund,
+            awardedTo            = newName,
+            newScore             = newScore,
+            response             = newResponse,
+            pointsSpent          = pointsSpent,
+            free                 = free and true or false,
+            guildKey             = gk,
+            rosterVersion        = PP.Repo.Roster:GetRosterVersion(gk),
+            activeSessionID      = gd.activeSessionID,
+            activeSessionVersion = gd.activeSessionVersion,
+        })
+    end
+
+    PP:Print(hist.itemLink .. " reassigned from " .. oldShort .. " (refunded " .. refund .. ") to " .. newShort)
+    PP:RefreshLootMasterWindow()
+    PP:RefreshMainWindow()
+    PP:RefreshLootHistoryWindow()
 end
 
 ---------------------------------------------------------------------------
