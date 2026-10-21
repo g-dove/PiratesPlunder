@@ -2,7 +2,7 @@
 
 ## Title: Pirates Plunder
 ## Author: Lucidify
-## Version: 1.0.6
+## Version: 1.0.7
 ## X-Curse-Project-ID: 1483035
 ## X-Wago-ID: L6J90xNv
 ## IconTexture: Interface/AddOns/PiratesPlunder/Media/icon.tga
