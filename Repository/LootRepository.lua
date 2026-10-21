@@ -57,6 +57,59 @@ function PP.Repo.Loot:RemovePendingTrade(idx)
     PP.Repo.Loot:Save()
 end
 
+-- Removes the first pending trade matching itemID + recipient.
+-- Returns true if one was found.
+function PP.Repo.Loot:RemovePendingTradeFor(itemID, awardedTo)
+    for i, p in ipairs(PP.pendingTrades) do
+        if p.itemID == itemID and p.awardedTo == awardedTo then
+            table.remove(PP.pendingTrades, i)
+            PP.Repo.Loot:Save()
+            return true
+        end
+    end
+    return false
+end
+
+function PP.Repo.Loot:HasPendingTradeFor(itemID, awardedTo)
+    for _, p in ipairs(PP.pendingTrades) do
+        if p.itemID == itemID and p.awardedTo == awardedTo then return true end
+    end
+    return false
+end
+
+---------------------------------------------------------------------------
+-- lootHistory accessors
+-- Awarded items for the active session, keyed by loot key, with the
+-- responses captured at award time. Cleared when the session ends.
+---------------------------------------------------------------------------
+function PP.Repo.Loot:GetHistory()
+    return PP.lootHistory
+end
+
+function PP.Repo.Loot:GetHistoryEntry(key)
+    return PP.lootHistory[key]
+end
+
+function PP.Repo.Loot:SetHistoryEntry(key, entry)
+    PP.lootHistory[key] = entry
+    PP.Repo.Loot:Save()
+end
+
+-- WipeHistory(guildKey?, sessionID?) – no args wipes everything; otherwise
+-- only entries matching the given roster (and session, if passed).
+function PP.Repo.Loot:WipeHistory(guildKey, sessionID)
+    if not guildKey then
+        wipe(PP.lootHistory)
+    else
+        for key, h in pairs(PP.lootHistory) do
+            if h.guildKey == guildKey and (not sessionID or h.sessionID == sessionID) then
+                PP.lootHistory[key] = nil
+            end
+        end
+    end
+    PP.Repo.Loot:Save()
+end
+
 ---------------------------------------------------------------------------
 -- Save() – persist pending loot across reloads
 -- (moved from PP:SavePendingLoot in main.lua)
@@ -86,6 +139,10 @@ function PP.Repo.Loot:Save()
             awardedTo = entry.awardedTo,
         }
     end
+    PP.db.global.lootHistoryCache = {}
+    for key, entry in pairs(PP.lootHistory) do
+        PP.db.global.lootHistoryCache[key] = entry
+    end
 end
 
 ---------------------------------------------------------------------------
@@ -93,6 +150,9 @@ end
 -- (moved from PP:RestorePendingLoot in main.lua)
 ---------------------------------------------------------------------------
 function PP.Repo.Loot:Restore()
+    -- History is checked per entry: each one carries its own roster/session
+    -- and only those whose session is still active come back.
+    PP.Repo.Loot:RestoreHistory()
     -- Don't restore stale loot if there is no active session
     if not PP.Repo.Roster:HasActiveSession() then
         PP.db.global.pendingLootCache = {}
@@ -123,6 +183,25 @@ function PP.Repo.Loot:Restore()
                 itemID    = saved.itemID,
                 awardedTo = saved.awardedTo,
             }
+        end
+    end
+end
+
+---------------------------------------------------------------------------
+-- RestoreHistory() – reload loot history for sessions that are still active.
+-- Skipped when memory already holds history (zone transition).
+---------------------------------------------------------------------------
+function PP.Repo.Loot:RestoreHistory()
+    if not PP.db or PP._sandbox then return end
+    if next(PP.lootHistory) ~= nil then return end
+    local cache = PP.db.global.lootHistoryCache
+    if not cache then return end
+    for key, saved in pairs(cache) do
+        local gd = PP.Repo.Roster:GetData(saved.guildKey)
+        local session = gd and saved.sessionID and gd.activeSessionID == saved.sessionID
+                        and gd.sessions[saved.sessionID]
+        if session and session.active then
+            PP.lootHistory[key] = saved
         end
     end
 end

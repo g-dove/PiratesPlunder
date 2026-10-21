@@ -40,3 +40,4 @@ UI\MinimapIcon.lua
 UI\VersionCheckWindow.lua
 UI\LootWindow.lua
 UI\AwardedLootWindow.lua
+UI\LootHistoryWindow.lua

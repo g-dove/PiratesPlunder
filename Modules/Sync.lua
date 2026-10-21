@@ -20,6 +20,7 @@ local MSG_PRIORITY = {
     [PP.MSG.LOOT_AWARD]           = "NORMAL",
     [PP.MSG.LOOT_CANCEL]          = "NORMAL",
     [PP.MSG.LOOT_CLEAR]           = "NORMAL",
+    [PP.MSG.LOOT_REASSIGN]        = "NORMAL",
     -- Session lifecycle
     [PP.MSG.SESSION_CREATE]       = "NORMAL",
     [PP.MSG.SESSION_CLOSE]        = "NORMAL",
@@ -130,6 +131,9 @@ function PP:OnCommReceived(prefix, message, distribution, sender)
 
     elseif msgType == PP.MSG.LOOT_AWARD then
         self:HandleLootAward(data, sender)
+
+    elseif msgType == PP.MSG.LOOT_REASSIGN then
+        self:HandleLootReassign(data, sender)
 
     elseif msgType == PP.MSG.LOOT_CANCEL then
         self:HandleLootCancel(data, sender)
@@ -1039,6 +1043,11 @@ function PP:HandleLootAward(data, sender)
     -- below still applies because the roster table is independent.
     if sessionInstalled and data.itemLink and data.awardedTo then
         PP.Session:RecordItemAward(data.itemLink, data.itemID, data.awardedTo, data.pointsSpent, data.response, data.key)
+        -- Responses this client saw for the item feed /pp history.
+        local lootEntry = PP.Repo.Loot:GetEntry(data.key)
+        PP.Loot:_RecordHistory(data.key, lootEntry or { itemLink = data.itemLink, itemID = data.itemID },
+            data.awardedTo, data.response, data.pointsSpent, false,
+            data.guildKey, data.activeSessionID)
     elseif not sessionInstalled then
         if PP._debug then
             self:Print("[Sync] LOOT_AWARD without session context; requesting session sync")
@@ -1052,19 +1061,7 @@ function PP:HandleLootAward(data, sender)
             roster[data.awardedTo].score = data.newScore
         end
     end
-    -- Advance local rosterVersion to match the loot master. A version gap
-    -- (missed prior broadcast) triggers RequestSessionSync; the leader replies
-    -- with the full roster + active session + live loot state.
-    if data.rosterVersion and data.guildKey then
-        local gd = PP.Repo.Roster:GetData(data.guildKey)
-        if gd then
-            if data.rosterVersion > gd.rosterVersion + 1 then
-                self:ScheduleTimer(function() self:RequestSessionSync() end, math.random())
-            elseif data.rosterVersion == gd.rosterVersion + 1 then
-                gd.rosterVersion = data.rosterVersion
-            end
-        end
-    end
+    self:_applyRosterVersion(data.guildKey, data.rosterVersion)
     -- If we were awarded, notify
     local me = self:GetPlayerFullName()
     if data.awardedTo == me then
@@ -1080,6 +1077,71 @@ function PP:HandleLootAward(data, sender)
     self:RefreshLootMasterWindow()
     self:RefreshLootResponseFrame()
     self:RefreshMainWindow()
+end
+
+-- Raid leader moved an awarded item to another player: refund the previous
+-- winner, charge the new one, and rewrite the session + history records.
+function PP:HandleLootReassign(data, sender)
+    if not data or not data.key or not data.awardedTo or not data.oldWinner then return end
+    if not self:_isSenderRaidLeader(sender) then return end
+    self:_adoptSessionContext(data.guildKey, data.activeSessionID, data.activeSessionVersion)
+
+    local roster = PP.Repo.Roster:GetRoster(data.guildKey)
+    if data.oldScore ~= nil and roster[data.oldWinner] then
+        roster[data.oldWinner].score = data.oldScore
+    end
+    if data.newScore ~= nil and roster[data.awardedTo] then
+        roster[data.awardedTo].score = data.newScore
+    end
+
+    PP.Session:UpdateItemAward(data.key, data.awardedTo, data.pointsSpent, data.response,
+        data.oldWinner, data.guildKey, data.activeSessionID)
+
+    local hist = PP.Repo.Loot:GetHistoryEntry(data.key)
+    if hist then
+        hist.awardedTo      = data.awardedTo
+        hist.response       = data.response
+        hist.pointsSpent    = data.pointsSpent or 0
+        hist.free           = data.free and true or false
+        hist.reassignedFrom = data.oldWinner
+        PP.Repo.Loot:SetHistoryEntry(data.key, hist)
+    end
+
+    self:_applyRosterVersion(data.guildKey, data.rosterVersion)
+
+    local me = self:GetPlayerFullName()
+    if data.awardedTo == me then
+        self:Print("You have been awarded " .. (data.itemLink or "an item") .. "!")
+    elseif data.oldWinner == me then
+        self:Print((data.itemLink or "An item") .. " was reassigned to " .. self:GetShortName(data.awardedTo)
+            .. ". You were refunded " .. (data.refund or 0) .. " points.")
+    end
+    self:RefreshMainWindow()
+    self:RefreshLootHistoryWindow()
+end
+
+function PP:_isSenderRaidLeader(sender)
+    for i = 1, GetNumGroupMembers() do
+        local name, rank = GetRaidRosterInfo(i)
+        if rank == 2 and name and self:GetFullName(name) == sender then
+            return true
+        end
+    end
+    return false
+end
+
+-- Advance local rosterVersion to match the loot master. A version gap
+-- (missed prior broadcast) triggers RequestSessionSync; the leader replies
+-- with the full roster + active session + live loot state.
+function PP:_applyRosterVersion(guildKey, rosterVersion)
+    if not rosterVersion or not guildKey then return end
+    local gd = PP.Repo.Roster:GetData(guildKey)
+    if not gd then return end
+    if rosterVersion > gd.rosterVersion + 1 then
+        self:ScheduleTimer(function() self:RequestSessionSync() end, math.random())
+    elseif rosterVersion == gd.rosterVersion + 1 then
+        gd.rosterVersion = rosterVersion
+    end
 end
 
 -- Vote cast by an officer or the raid leader suggesting a recipient

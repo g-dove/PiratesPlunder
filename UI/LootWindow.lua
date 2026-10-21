@@ -89,6 +89,7 @@ local function itemBlock(parent, item, index)
     titleLbl:SetPoint("LEFT", titleBar, "LEFT", 8, 0)
     PP:AddItemTooltip(titleBar, item.itemLink)
     block._titleBar = titleBar
+    block._titleLbl = titleLbl
     block._y = -26
     return block
 end
@@ -100,6 +101,77 @@ local function blockAdd(block, widget, y, x)
     widget:SetPoint("TOPRIGHT", block, "TOPRIGHT", -x, block._y)
     block._y = block._y - y
 end
+
+-- Response table shared by the loot-master window and the loot history
+-- detail view. addActions(row, resp) draws per-row buttons starting at x=520.
+local function drawResponseRows(block, itemLink, responses, addActions)
+    local hdr = Kit:Row(block, 18)
+    local cols = { {t="#",w=25}, {t="Player",w=140}, {t="Score",w=50}, {t="Roll",w=45}, {t="Response",w=90}, {t="Equipped",w=130}, {t="Votes",w=55} }
+    local x = 0
+    for _, c in ipairs(cols) do
+        local l = Kit:Label(hdr, c.t, "small")
+        l:SetTextColor(Kit.Palette.accent[1], Kit.Palette.accent[2], Kit.Palette.accent[3])
+        l:SetPoint("LEFT", hdr, "LEFT", x, 0)
+        x = x + c.w
+    end
+    blockAdd(block, hdr, 20)
+
+    for rIdx, resp in ipairs(responses) do
+        local row = Kit:Row(block, 22)
+        Kit:Label(row, tostring(rIdx), "small"):SetPoint("LEFT", row, "LEFT", 0, 0)
+        Kit:Label(row, resp.name, "small"):SetPoint("LEFT", row, "LEFT", 25, 0)
+        Kit:Label(row, "|cFFFFFF00" .. tostring(resp.score) .. "|r", "small"):SetPoint("LEFT", row, "LEFT", 165, 0)
+        Kit:Label(row, tostring(resp.roll), "small"):SetPoint("LEFT", row, "LEFT", 215, 0)
+        local respColor = resp.response == PP.RESPONSE.NEED and "|cFF00FF00"
+                       or resp.response == PP.RESPONSE.MINOR and "|cFF00CCFF" or "|cFFFF8800"
+        Kit:Label(row, respColor .. resp.response .. "|r", "small"):SetPoint("LEFT", row, "LEFT", 260, 0)
+
+        if resp.equippedLinks then
+            local _, _, _, newIlvl = C_Item.GetItemInfo(itemLink)
+            local bestDiff = nil
+            local ix = 350
+            for _, eLink in ipairs(resp.equippedLinks) do
+                local _, _, _, eIlvl, _, _, _, _, _, tex = C_Item.GetItemInfo(eLink)
+                if eIlvl and newIlvl then
+                    local d = newIlvl - eIlvl
+                    if bestDiff == nil or d > bestDiff then bestDiff = d end
+                end
+                local icon = row:CreateTexture(nil, "OVERLAY")
+                icon:SetSize(16, 16)
+                icon:SetPoint("LEFT", row, "LEFT", ix, 0)
+                if tex then icon:SetTexture(tex) end
+                local capturedLink = eLink
+                local hover = CreateFrame("Frame", nil, row)
+                hover:SetAllPoints(icon)
+                PP:AddItemTooltip(hover, capturedLink)
+                ix = ix + 18
+            end
+            local diffLbl
+            if bestDiff ~= nil then
+                local color = bestDiff > 0 and "|cFF00FF00" or bestDiff < 0 and "|cFFFF4444" or "|cFFAAAAAA"
+                diffLbl = Kit:Label(row, color .. (bestDiff > 0 and "+" or "") .. bestDiff .. " ilvl|r", "small")
+            else
+                diffLbl = Kit:Label(row, "|cFFAAAAAA(empty)|r", "small")
+            end
+            diffLbl:SetPoint("LEFT", row, "LEFT", 400, 0)
+        end
+
+        local voteCount = resp.voteCount or 0
+        Kit:Label(row, voteCount > 0 and ("|cFFFFD100" .. voteCount .. "|r") or "|cFF888888-|r", "small")
+            :SetPoint("LEFT", row, "LEFT", 480, 0)
+
+        if addActions then addActions(row, resp) end
+
+        blockAdd(block, row, 22)
+    end
+end
+
+-- Exposed for UI/LootHistoryWindow.lua
+PP.LootUI = {
+    ItemBlock         = itemBlock,
+    BlockAdd          = blockAdd,
+    DrawResponseRows  = drawResponseRows,
+}
 
 function PP:DrawLootMasterContent()
     if not self.lootMasterWindow or not self._lmList then return end
@@ -190,6 +262,11 @@ function PP:DrawLootMasterContent()
         blockH = blockH + extra
 
         local block = itemBlock(content, item, idx)
+        if nonResponders and #nonResponders > 0 then
+            local warn = Kit:Label(block._titleBar, "|cFFFF3333(" .. #nonResponders
+                .. " not responded)|r", "small")
+            warn:SetPoint("LEFT", block._titleLbl, "RIGHT", 8, 0)
+        end
 
         local infoLbl = Kit:Label(block, "Responses: " .. item.responseCount .. "  |  By: "
             .. self:GetShortName(item.postedBy) .. "  |  Transmog: "
@@ -197,62 +274,14 @@ function PP:DrawLootMasterContent()
         blockAdd(block, infoLbl, 20)
 
         if #responses > 0 then
-            local hdr = Kit:Row(block, 18)
-            local cols = { {t="#",w=25}, {t="Player",w=140}, {t="Score",w=50}, {t="Roll",w=45}, {t="Response",w=90}, {t="Equipped",w=130}, {t="Votes",w=55} }
-            local x = 0
-            for _, c in ipairs(cols) do
-                local l = Kit:Label(hdr, c.t, "small")
-                l:SetTextColor(Kit.Palette.accent[1], Kit.Palette.accent[2], Kit.Palette.accent[3])
-                l:SetPoint("LEFT", hdr, "LEFT", x, 0)
-                x = x + c.w
-            end
-            blockAdd(block, hdr, 20)
-
-            for rIdx, resp in ipairs(responses) do
-                local row = Kit:Row(block, 22)
-                Kit:Label(row, tostring(rIdx), "small"):SetPoint("LEFT", row, "LEFT", 0, 0)
-                Kit:Label(row, resp.name, "small"):SetPoint("LEFT", row, "LEFT", 25, 0)
-                Kit:Label(row, "|cFFFFFF00" .. resp.score .. "|r", "small"):SetPoint("LEFT", row, "LEFT", 165, 0)
-                Kit:Label(row, tostring(resp.roll), "small"):SetPoint("LEFT", row, "LEFT", 215, 0)
-                local respColor = resp.response == PP.RESPONSE.NEED and "|cFF00FF00"
-                               or resp.response == PP.RESPONSE.MINOR and "|cFF00CCFF" or "|cFFFF8800"
-                Kit:Label(row, respColor .. resp.response .. "|r", "small"):SetPoint("LEFT", row, "LEFT", 260, 0)
-
-                if resp.equippedLinks then
-                    local _, _, _, newIlvl = C_Item.GetItemInfo(item.itemLink)
-                    local bestDiff = nil
-                    local ix = 350
-                    for _, eLink in ipairs(resp.equippedLinks) do
-                        local _, _, _, eIlvl, _, _, _, _, _, tex = C_Item.GetItemInfo(eLink)
-                        if eIlvl and newIlvl then
-                            local d = newIlvl - eIlvl
-                            if bestDiff == nil or d > bestDiff then bestDiff = d end
-                        end
-                        local icon = row:CreateTexture(nil, "OVERLAY")
-                        icon:SetSize(16, 16)
-                        icon:SetPoint("LEFT", row, "LEFT", ix, 0)
-                        if tex then icon:SetTexture(tex) end
-                        local capturedLink = eLink
-                        local hover = CreateFrame("Frame", nil, row)
-                        hover:SetAllPoints(icon)
-                        PP:AddItemTooltip(hover, capturedLink)
-                        ix = ix + 18
-                    end
-                    local diffLbl
-                    if bestDiff ~= nil then
-                        local color = bestDiff > 0 and "|cFF00FF00" or bestDiff < 0 and "|cFFFF4444" or "|cFFAAAAAA"
-                        diffLbl = Kit:Label(row, color .. (bestDiff > 0 and "+" or "") .. bestDiff .. " ilvl|r", "small")
-                    else
-                        diffLbl = Kit:Label(row, "|cFFAAAAAA(empty)|r", "small")
-                    end
-                    diffLbl:SetPoint("LEFT", row, "LEFT", 400, 0)
-                end
-
-                local voteCount = resp.voteCount or 0
-                Kit:Label(row, voteCount > 0 and ("|cFFFFD100" .. voteCount .. "|r") or "|cFF888888-|r", "small")
-                    :SetPoint("LEFT", row, "LEFT", 480, 0)
-
+            drawResponseRows(block, item.itemLink, responses, function(row, resp)
                 local capturedKey, capturedName = item.key, resp.fullName
+                local lootEntry = PP.Repo.Loot:GetEntry(item.key)
+                local votedThis = lootEntry and lootEntry.votes and lootEntry.votes[me] == resp.fullName
+                local voteBtn = Kit:Button(row, votedThis and "|cFF00FF00Vote|r" or "Vote", function()
+                    PP:CastVote(capturedKey, capturedName)
+                end)
+                voteBtn:SetSize(55, 20)
                 if item.postedBy == me then
                     local awardBtn = Kit:Button(row, "Award", function() PP.Loot:Award(capturedKey, capturedName) end)
                     awardBtn:SetSize(60, 20)
@@ -260,25 +289,11 @@ function PP:DrawLootMasterContent()
                     local freeBtn = Kit:Button(row, "Free", function() PP.Loot:Award(capturedKey, capturedName, true) end)
                     freeBtn:SetSize(50, 20)
                     freeBtn:SetPoint("LEFT", awardBtn, "RIGHT", 4, 0)
-                    local lootEntry = PP.Repo.Loot:GetEntry(item.key)
-                    local votedThis = lootEntry and lootEntry.votes and lootEntry.votes[me] == resp.fullName
-                    local voteBtn = Kit:Button(row, votedThis and "|cFF00FF00Vote|r" or "Vote", function()
-                        PP:CastVote(capturedKey, capturedName)
-                    end)
-                    voteBtn:SetSize(55, 20)
                     voteBtn:SetPoint("LEFT", freeBtn, "RIGHT", 4, 0)
                 else
-                    local lootEntry = PP.Repo.Loot:GetEntry(item.key)
-                    local votedThis = lootEntry and lootEntry.votes and lootEntry.votes[me] == resp.fullName
-                    local voteBtn = Kit:Button(row, votedThis and "|cFF00FF00Vote|r" or "Vote", function()
-                        PP:CastVote(capturedKey, capturedName)
-                    end)
-                    voteBtn:SetSize(55, 20)
                     voteBtn:SetPoint("LEFT", row, "LEFT", 520, 0)
                 end
-
-                blockAdd(block, row, 22)
-            end
+            end)
         else
             local waiting = Kit:Label(block, "Waiting for responses...", "small")
             blockAdd(block, waiting, 20)
@@ -319,6 +334,17 @@ function PP:DrawLootMasterContent()
             end)
             clearBtn:SetSize(80, 20)
             clearBtn:SetPoint("RIGHT", tRow, "RIGHT", 0, 0)
+            if PP:IsSandbox() then
+                -- No trade partner exists in sandbox; pretend the trade went through.
+                local simBtn = Kit:Button(tRow, "Sim Trade", function()
+                    PP:Print("|cFFFFD100[Sandbox] Traded|r " .. (trade.itemLink or "item")
+                        .. " to " .. PP:GetShortName(trade.awardedTo))
+                    PP:RemovePendingTrade(trade.itemID, trade.awardedTo)
+                    PP:RefreshLootMasterWindow()
+                end)
+                simBtn:SetSize(80, 20)
+                simBtn:SetPoint("RIGHT", clearBtn, "LEFT", -4, 0)
+            end
             list:Add(tRow, 22)
         end
         local clearAllBtn = Kit:Button(content, "Clear All Trades", function()

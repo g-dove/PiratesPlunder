@@ -205,8 +205,13 @@ end
 ---------------------------------------------------------------------------
 function PP.Roster:GetRaidMemberSet()
     if PP._sandbox then
+        -- Every fake sandbox member counts as "in the raid" so the loot
+        -- master's Waiting list tracks their simulated responses.
         local set = {}
         set[PP:GetPlayerFullName()] = true
+        for fullName in pairs(PP.Repo.Roster:GetRoster()) do
+            set[fullName] = true
+        end
         return set
     end
     local set = {}
