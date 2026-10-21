@@ -1,5 +1,48 @@
 # Changelog
 
+## [1.0.7] - 2026-10-21
+
+### Added
+- Session loot history: `/pp history` (`/pp h`) opens a list of every item awarded in the active session (officers and raid leader only) with winner, response, and cost. **View** opens the responses captured for that item — score, roll, response, equipped ilvl, votes — in the same layout as the Loot Master window.
+- Loot reassign: from the history detail view the raid leader can **Award** / **Free** the item to a different responder (`PP.Loot:Reassign`). The previous winner is refunded what they spent onto their current score; the new winner is charged from their current score using the response they gave. Raid chat announces the refund plus the usual award message. The pending trade moves to the new winner; if the item has already left pending trades, a confirm popup (`PP_CONFIRM_REASSIGN_TRADED`) warns it may already have been traded.
+- `LOOT_REASSIGN` message (`"LOT_RSN"`, NORMAL priority, additive): accepted only from the current raid leader. Receivers set both scores, rewrite the `session.items` record (new `reassignedFrom` field), update their history entry, and advance `rosterVersion`. Older clients ignore it and catch up on the next version gap.
+- `PP.lootHistory` runtime table + `lootHistoryCache` saved variable: history survives `/reload` while its session is still active, and is wiped when the session ends or a new one is created.
+- `PP.Repo.Loot` history accessors (`GetHistory`, `GetHistoryEntry`, `SetHistoryEntry`, `WipeHistory`, `RestoreHistory`) and pending-trade helpers (`RemovePendingTradeFor`, `HasPendingTradeFor`). `PP.Session:UpdateItemAward` for rewriting an award record.
+- Loot Master window: red "(N not responded)" warning next to an item's name while raid members still haven't responded.
+- Sandbox testing: posting an item makes the fake roster members respond at random after a short delay, all fake members count as raid members, raid announcements print locally, and pending trades get a **Sim Trade** button — award, reassign, and trade flows can be tested solo.
+
+### Changed
+- Award cost rules extracted to `PP.Loot:_ChargeWinner`, shared by `Award` and `Reassign`.
+- Loot response table rendering extracted to `PP.LootUI.DrawResponseRows`, shared by the Loot Master window and the history detail view. `PP:SortResponses(entry)` added alongside `GetSortedResponses(key)`.
+- `LOOT_AWARD` roster-version handling moved into `PP:_applyRosterVersion`; raid-leader sender check available as `PP:_isSenderRaidLeader`.
+
+## [1.0.6] - 2026-10-14
+
+### Changed
+- Interface version list updated to `120100, 120105` (drops `120000`, `120001`, `120005`).
+
+## [1.0.5] - 2026-10-07
+
+### Added
+- Stale session sweep (`PP.Session:SweepStale`): at login, ends active sessions under every roster that aren't grouped or are older than `PP.SESSION_MAX_AGE` (16 h); on every grouped `GROUP_ROSTER_UPDATE`, ends sessions whose leader isn't in our group. `PP.Session:EndStale` routes the selected roster through `End()` and only tears down records for other rosters.
+- Orphan cleanup (`PP.Session:CloseOrphans`): closes any session record still flagged `active` that isn't the roster's current session. Runs for every roster at login and after `SYNC_FULL` / `SESSION_SYNC_REPLY` merges. New `ORPHAN_CLEANUP` end reason.
+- `PP.SESSION_END_SOFT`: marks locally-inferred end reasons (`LEFT_GROUP`, `LEADER_LEFT`, `STARTUP_CHECK`, `ORPHAN_CLEANUP`). A session dropped this way can be re-adopted from the leader at an equal `activeSessionVersion`.
+- `PP.Session:IsLeaderInGroup`: returns nil when group names haven't loaded so callers only act on a definite `false`.
+- `PP:GetUnitFullName(unit)`: resolves a unit's real Name-Realm by GUID, then raid roster, then `UnitName`. Disguises (toys, costumes, quest illusions) no longer produce the wrong name for the player, roster auto-populate, or trade partner.
+
+### Changed
+- Only the raid leader can create a session (the create broadcast is leader-gated, so a non-leader officer's session was invisible to everyone else).
+- `activeSessionVersion` advances only on changes the raid hears about (leader create, announced close, delete). Local-only ends (left group, startup check, sync teardown) no longer bump it, which had let receivers drift ahead of the leader and reject its broadcasts as stale. One-time migration (`migrated_session_version_reset`) resets every roster's counter to 0.
+- `ClearActiveSessionID(gk, keepVersion)` can clear the pointer without advancing the version.
+- Leaving a group: the 30 s pending session end is cancelled only by rejoining a group that contains the session leader; joining any other group (dungeon party, LFR) lets it run. The pending end now targets its own roster even if joining another raid switched the selected roster.
+- `HandleSessionSyncReply` picks up leader hand-offs that happened while offline. `HandleSessionClose` marks the record `SYNC_RECEIVED` (so it can't be re-adopted) and takes the leader's post-close version.
+- `_ensureSessionRecord` installs a record as active only when it matches the current session pointer.
+- `.idea` added to `.pkgmeta` ignore list.
+
+### Fixed
+- Closing a Kit window by any means (e.g. Escape) now runs its close handler, not just the close button.
+- Reopening the main window rebuilds its tab lists instead of reusing stale references.
+
 ## [1.0.0] - 2026-08-15
 
 ### Changed
